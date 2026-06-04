@@ -12,11 +12,29 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, pi-mono }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      pi-mono,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        lib = pkgs.lib;
         nodejs = pkgs.nodejs_24;
+
+        # Enumerate *.test.ts files inside extensions/ at Nix evaluation time.
+        # Store relative paths so all sibling files (e.g. ./logic.ts) remain
+        # co-located under the same ${./extensions} Nix store path, keeping
+        # relative imports intact at test-run time.
+        testRelPaths = map
+          (f: lib.removePrefix (toString ./extensions + "/") (toString f))
+          (lib.filter
+            (f: lib.hasSuffix ".test.ts" (builtins.baseNameOf (toString f)))
+            (lib.filesystem.listFilesRecursive ./extensions));
 
         pi = pkgs.buildNpmPackage {
           pname = "pi-coding-agent";
@@ -52,6 +70,16 @@
             runHook postBuild
           '';
 
+          checkPhase = ''
+            runHook preCheck
+            ${lib.concatMapStrings (rel: ''
+              echo "running ${rel}"
+              ${nodejs}/bin/node ${./extensions}/${rel}
+            '') testRelPaths}
+            runHook postCheck
+          '';
+          doCheck = true;
+
           installPhase = ''
             runHook preInstall
 
@@ -79,7 +107,7 @@
 
             # Build --extension / --skill flags for every bundled item.
             # pi accepts both file and directory paths for each flag.
-            extra_flags=""
+            extra_flags="--no-extensions --no-skills"
             for ext in "$out/share/pi/extensions"/*; do
               extra_flags="$extra_flags --extension $ext"
             done
