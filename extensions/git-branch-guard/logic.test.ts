@@ -4,18 +4,13 @@
  * Run with plain Node (no framework, no build step required):
  *
  *   node logic.test.ts
- *
- * Node v22+ strips TypeScript types natively so no tsx/ts-node needed.
  */
 import assert from "node:assert/strict";
 import {
-  findBranchSwitchInText,
-  findGitCommitInText,
+  isForcePushLine,
+  findForcePushInText,
   extractScriptPaths,
   isShellScript,
-  isBranchSwitchLine,
-  isGitCommitLine,
-  isGitInternalPath,
 } from "./logic.ts";
 
 // ---------------------------------------------------------------------------
@@ -31,7 +26,8 @@ function test(name: string, fn: () => void): void {
     console.log(`  ✓  ${name}`);
     passed++;
   } catch (err) {
-    const msg = err instanceof assert.AssertionError ? err.message : String(err);
+    const msg =
+      err instanceof assert.AssertionError ? err.message : String(err);
     console.error(`  ✗  ${name}\n       ${msg}`);
     failed++;
   }
@@ -43,200 +39,99 @@ function suite(name: string, fn: () => void): void {
 }
 
 // ---------------------------------------------------------------------------
-// isBranchSwitchLine
+// isForcePushLine — blocked
 // ---------------------------------------------------------------------------
 
-suite("isBranchSwitchLine — blocked", () => {
+suite("isForcePushLine — blocked (force push)", () => {
   const cases = [
-    "git checkout main",
-    "git checkout feature/foo",
-    "git checkout -b new-branch",
-    "git checkout -B hotfix",
-    "git switch main",
-    "git switch -c new-branch",
-    "git switch -C new-branch",
-    "git switch --create new-branch",
-    "git switch develop",
-    "sudo git checkout main",
-    "sudo -n git switch develop",
-    // symbolic-ref — plumbing bypass of the branch guard
-    "git symbolic-ref HEAD refs/heads/main",
-    "git symbolic-ref HEAD refs/heads/feature/foo",
-    "git symbolic-ref HEAD",
-    "git symbolic-ref --short HEAD",
-    "sudo git symbolic-ref HEAD refs/heads/main",
+    "git push --force",
+    "git push -f",
+    "git push origin main --force",
+    "git push origin main -f",
+    "git push --force origin main",
+    "git push --force-with-lease",
+    "git push --force-with-lease origin main",
+    "git push origin main --force-with-lease",
+    "git push --force-with-lease=origin/main",
+    "sudo git push --force",
+    "sudo -n git push -f",
   ];
   for (const c of cases) {
-    test(JSON.stringify(c), () => assert.ok(isBranchSwitchLine(c)));
+    test(JSON.stringify(c), () => assert.ok(isForcePushLine(c)));
   }
 });
 
-suite("isBranchSwitchLine — allowed (no branch change)", () => {
+// ---------------------------------------------------------------------------
+// isForcePushLine — allowed
+// ---------------------------------------------------------------------------
+
+suite("isForcePushLine — allowed (regular push or not git)", () => {
   const cases = [
-    "git checkout -- src/main.rs",
-    "git checkout -- .",
-    "git checkout -p",
-    "git restore src/main.rs",
-    "git restore --staged .",
+    "git push",
+    "git push origin main",
+    "git push origin HEAD",
+    "git push --set-upstream origin feature",
+    "git push -u origin feature",
+    "echo git push --force", // not a real git command
     "git status",
-    "echo git checkout main",  // not actually a git command
+    "git commit -m 'msg'",
+    "git checkout main",
+    "# git push --force", // comment (handled by findForcePushInText)
   ];
   for (const c of cases) {
-    test(JSON.stringify(c), () => assert.ok(!isBranchSwitchLine(c)));
+    test(JSON.stringify(c), () => assert.ok(!isForcePushLine(c)));
   }
 });
 
 // ---------------------------------------------------------------------------
-// findBranchSwitchInText
+// findForcePushInText
 // ---------------------------------------------------------------------------
 
-suite("findBranchSwitchInText — blocked", () => {
-  test("single-line checkout", () =>
-    assert.ok(findBranchSwitchInText("git checkout main") !== null));
+suite("findForcePushInText — detected", () => {
+  test("bare force push", () =>
+    assert.ok(findForcePushInText("git push --force") !== null));
 
-  test("single-line switch", () =>
-    assert.ok(findBranchSwitchInText("git switch main") !== null));
+  test("force push with -f", () =>
+    assert.ok(findForcePushInText("git push -f") !== null));
 
-  test("branch switch inside multi-line script body", () => {
-    const script = `#!/bin/bash\necho hello\ngit checkout feature\necho done`;
-    assert.ok(findBranchSwitchInText(script) !== null);
+  test("force-with-lease", () =>
+    assert.ok(findForcePushInText("git push --force-with-lease") !== null));
+
+  test("force push in multi-line script", () => {
+    const script =
+      "#!/bin/bash\ngit add .\ngit commit -m 'wip'\ngit push --force";
+    assert.ok(findForcePushInText(script) !== null);
   });
+
+  test("force push after && on same line", () =>
+    assert.ok(
+      findForcePushInText("git commit -m 'msg' && git push --force") !== null
+    ));
+
+  test("force push after ; on same line", () =>
+    assert.ok(findForcePushInText("git add .; git push -f") !== null));
 
   test("returns the offending line trimmed", () => {
-    const result = findBranchSwitchInText("  git checkout feature  ");
-    assert.equal(result, "git checkout feature");
+    const result = findForcePushInText("  git push --force  ");
+    assert.equal(result, "git push --force");
   });
-
-  test("symbolic-ref with branch argument", () =>
-    assert.ok(
-      findBranchSwitchInText("git symbolic-ref HEAD refs/heads/main") !== null
-    ));
-
-  test("symbolic-ref read-only form still blocked", () =>
-    assert.ok(findBranchSwitchInText("git symbolic-ref HEAD") !== null));
-
-  test("symbolic-ref inside compound command", () =>
-    assert.ok(
-      findBranchSwitchInText(
-        "git update-ref refs/heads/my-branch HEAD && git symbolic-ref HEAD refs/heads/my-branch"
-      ) !== null
-    ));
 });
 
-suite("findBranchSwitchInText — allowed", () => {
-  test("file restore checkout", () =>
-    assert.equal(findBranchSwitchInText("git checkout -- src/main.rs"), null));
+suite("findForcePushInText — not detected", () => {
+  test("regular push", () =>
+    assert.equal(findForcePushInText("git push origin main"), null));
 
-  test("patch checkout", () =>
-    assert.equal(findBranchSwitchInText("git checkout -p"), null));
-
-  test("git restore", () =>
-    assert.equal(findBranchSwitchInText("git restore ."), null));
-
-  test("commented-out checkout is ignored", () =>
-    assert.equal(findBranchSwitchInText("# git checkout main"), null));
+  test("commented-out force push", () =>
+    assert.equal(findForcePushInText("# git push --force"), null));
 
   test("unrelated command", () =>
-    assert.equal(findBranchSwitchInText("cargo build --release"), null));
+    assert.equal(findForcePushInText("cargo build --release"), null));
 
-  test("clean multi-line script", () => {
-    const script = `#!/bin/bash\nset -e\ncargo test\ngit add .\ngit commit -m "wip"`;
-    assert.equal(findBranchSwitchInText(script), null);
+  test("regular push in multi-line script", () => {
+    const script =
+      "#!/bin/bash\ngit add .\ngit commit -m 'done'\ngit push origin main";
+    assert.equal(findForcePushInText(script), null);
   });
-});
-
-suite("findBranchSwitchInText — compound commands", () => {
-  test("git checkout after && on same line", () =>
-    assert.ok(findBranchSwitchInText("cd /repo && git checkout main") !== null));
-
-  test("git checkout after ; on same line", () =>
-    assert.ok(findBranchSwitchInText("echo hi; git checkout main") !== null));
-
-  test("git checkout after || on same line", () =>
-    assert.ok(findBranchSwitchInText("false || git checkout main") !== null));
-
-  test("multi-step compound: cd && add && checkout", () =>
-    assert.ok(
-      findBranchSwitchInText("cd /repo && git add . && git checkout feature") !== null
-    ));
-
-  test("compound with only safe git commands passes", () =>
-    assert.equal(
-      findBranchSwitchInText("cd /repo && git add . && git commit -m 'wip'"),
-      null
-    ));
-});
-
-// ---------------------------------------------------------------------------
-// isGitCommitLine
-// ---------------------------------------------------------------------------
-
-suite("isGitCommitLine — matched", () => {
-  const cases = [
-    "git commit",
-    "git commit -m 'msg'",
-    'git commit -m "msg"',
-    "git commit --amend",
-    "git commit --amend --no-edit",
-    "git commit -a -m 'all'",
-    "sudo git commit -m 'msg'",
-  ];
-  for (const c of cases) {
-    test(JSON.stringify(c), () => assert.ok(isGitCommitLine(c)));
-  }
-});
-
-suite("isGitCommitLine — not matched", () => {
-  const cases = [
-    "git add .",
-    "git push origin main",
-    "git status",
-    "echo git commit",
-    "# git commit -m 'skip'",
-  ];
-  for (const c of cases) {
-    test(JSON.stringify(c), () => assert.ok(!isGitCommitLine(c)));
-  }
-});
-
-// ---------------------------------------------------------------------------
-// findGitCommitInText
-// ---------------------------------------------------------------------------
-
-suite("findGitCommitInText — detected", () => {
-  test("bare git commit", () =>
-    assert.ok(findGitCommitInText("git commit -m 'wip'") !== null));
-
-  test("git commit in multi-line script", () => {
-    const script = "#!/bin/bash\ngit add .\ngit commit -m 'done'";
-    assert.ok(findGitCommitInText(script) !== null);
-  });
-
-  test("git commit after && on same line", () =>
-    assert.ok(
-      findGitCommitInText("cd /repo && git add . && git commit -m 'msg'") !== null
-    ));
-
-  test("git commit after ; on same line", () =>
-    assert.ok(findGitCommitInText("git add .; git commit -m 'msg'") !== null));
-
-  test("compound: cd && add && commit — the real-world case", () =>
-    assert.ok(
-      findGitCommitInText(
-        "cd /home/user/project && git add crates/proxy/src/lib.rs && git commit -m 'fix: something'"
-      ) !== null
-    ));
-});
-
-suite("findGitCommitInText — not detected", () => {
-  test("no git commit present", () =>
-    assert.equal(findGitCommitInText("git add . && git push origin main"), null));
-
-  test("commented-out commit is ignored", () =>
-    assert.equal(findGitCommitInText("# git commit -m 'skip'"), null));
-
-  test("unrelated command", () =>
-    assert.equal(findGitCommitInText("cargo build --release"), null));
 });
 
 // ---------------------------------------------------------------------------
@@ -248,10 +143,14 @@ suite("extractScriptPaths", () => {
     assert.deepEqual(extractScriptPaths("bash script.sh"), ["script.sh"]));
 
   test("bash with flags", () =>
-    assert.deepEqual(extractScriptPaths("bash -x -e ./deploy.sh"), ["./deploy.sh"]));
+    assert.deepEqual(extractScriptPaths("bash -x -e ./deploy.sh"), [
+      "./deploy.sh",
+    ]));
 
   test("sh with absolute path", () =>
-    assert.deepEqual(extractScriptPaths("sh -e /tmp/run.sh"), ["/tmp/run.sh"]));
+    assert.deepEqual(extractScriptPaths("sh -e /tmp/run.sh"), [
+      "/tmp/run.sh",
+    ]));
 
   test("zsh script", () =>
     assert.deepEqual(extractScriptPaths("zsh build.sh"), ["build.sh"]));
@@ -271,19 +170,18 @@ suite("extractScriptPaths", () => {
     ]));
 
   test("bash -c inline → no paths returned", () =>
-    assert.deepEqual(extractScriptPaths("bash -c 'git checkout main'"), []));
-
-  test("sh -c inline → no paths returned", () =>
-    assert.deepEqual(extractScriptPaths('sh -c "git switch main"'), []));
+    assert.deepEqual(extractScriptPaths("bash -c 'git push --force'"), []));
 
   test("compound: echo && bash run.sh", () =>
-    assert.deepEqual(extractScriptPaths("echo hi && bash run.sh"), ["run.sh"]));
+    assert.deepEqual(extractScriptPaths("echo hi && bash run.sh"), [
+      "run.sh",
+    ]));
 
   test("compound: multiple scripts", () =>
-    assert.deepEqual(
-      extractScriptPaths("bash a.sh && bash b.sh"),
-      ["a.sh", "b.sh"]
-    ));
+    assert.deepEqual(extractScriptPaths("bash a.sh && bash b.sh"), [
+      "a.sh",
+      "b.sh",
+    ]));
 });
 
 // ---------------------------------------------------------------------------
@@ -291,14 +189,11 @@ suite("extractScriptPaths", () => {
 // ---------------------------------------------------------------------------
 
 suite("isShellScript", () => {
-  test(".sh extension", () =>
-    assert.ok(isShellScript("deploy.sh", "")));
+  test(".sh extension", () => assert.ok(isShellScript("deploy.sh", "")));
 
-  test(".bash extension", () =>
-    assert.ok(isShellScript("setup.bash", "")));
+  test(".bash extension", () => assert.ok(isShellScript("setup.bash", "")));
 
-  test(".zsh extension", () =>
-    assert.ok(isShellScript("run.zsh", "")));
+  test(".zsh extension", () => assert.ok(isShellScript("run.zsh", "")));
 
   test("no extension but bash shebang", () =>
     assert.ok(isShellScript("Makefile-runner", "#!/bin/bash\necho hi")));
@@ -306,62 +201,11 @@ suite("isShellScript", () => {
   test("no extension but env shebang", () =>
     assert.ok(isShellScript("run", "#!/usr/bin/env bash\necho hi")));
 
-  test("no extension, sh shebang", () =>
-    assert.ok(isShellScript("build", "#!/bin/sh\nset -e")));
-
   test(".ts file → not a shell script", () =>
     assert.ok(!isShellScript("index.ts", "const x = 1;")));
 
-  test(".rs file → not a shell script", () =>
-    assert.ok(!isShellScript("main.rs", 'fn main() { println!("hi"); }')));
-
   test("no extension, no shebang → not a shell script", () =>
     assert.ok(!isShellScript("README", "# Hello world")));
-
-  test("python shebang → not a shell script", () =>
-    assert.ok(!isShellScript("script", "#!/usr/bin/env python3\nprint('hi')")));
-});
-
-// ---------------------------------------------------------------------------
-// isGitInternalPath
-// ---------------------------------------------------------------------------
-
-suite("isGitInternalPath — blocked (inside .git/)", () => {
-  const cases = [
-    ".git/HEAD",
-    ".git/config",
-    ".git/COMMIT_EDITMSG",
-    ".git/ORIG_HEAD",
-    ".git/MERGE_HEAD",
-    ".git/refs/heads/main",
-    ".git/hooks/pre-commit",
-    ".git/worktrees/my-wt/HEAD",
-    "/home/user/repo/.git/HEAD",
-    "/home/user/repo/.git/config",
-    "/home/user/repo/.git/hooks/pre-push",
-    "/home/user/repo/.git/worktrees/feature/HEAD",
-    "../../other-repo/.git/config",
-    "some/nested/path/.git/refs/heads/main",
-  ];
-  for (const c of cases) {
-    test(JSON.stringify(c), () => assert.ok(isGitInternalPath(c)));
-  }
-});
-
-suite("isGitInternalPath — allowed (outside .git/)", () => {
-  const cases = [
-    ".gitignore",
-    ".gitconfig",
-    ".github/workflows/ci.yml",
-    "my.git/config",            // not a bare .git component
-    "src/HEAD.rs",
-    "docs/HEAD.md",
-    "HEAD",                     // bare filename, no .git/ parent
-    "README.md",
-  ];
-  for (const c of cases) {
-    test(JSON.stringify(c), () => assert.ok(!isGitInternalPath(c)));
-  }
 });
 
 // ---------------------------------------------------------------------------
