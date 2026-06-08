@@ -115,6 +115,28 @@ export default function (pi: ExtensionAPI) {
       // 3. Categorise
       const failures = pollResult.checks.filter((c) => isFailure(c.bucket));
 
+      // ⚠️ No checks at all — don't claim CI is green.
+      if (pollResult.checks.length === 0) {
+        cycleCount = 0;
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `No CI checks are configured for ${pollResult.mode}. ` +
+                `The push succeeded, but nothing ran — there is no CI signal ` +
+                `to confirm the change is good. Tell the user no checks ran ` +
+                `rather than claiming CI passed.`,
+            },
+          ],
+          details: {
+            checks: [],
+            mode: pollResult.mode,
+            noChecks: true,
+          },
+        };
+      }
+
       // ✅ All passed
       if (failures.length === 0) {
         cycleCount = 0;
