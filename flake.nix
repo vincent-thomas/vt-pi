@@ -5,11 +5,6 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # Source-only input — not a flake itself, pinned to a commit in flake.lock
-    pi-mono = {
-      url = "github:badlogic/pi-mono";
-      flake = false;
-    };
   };
 
   outputs =
@@ -132,7 +127,10 @@
             runHook postInstall
           '';
 
-          nativeBuildInputs = [ pkgs.makeWrapper pkgs.git ];
+          nativeBuildInputs = [
+            pkgs.makeWrapper
+            pkgs.git
+          ];
 
           meta = with pkgs.lib; {
             description = "Coding agent CLI with read, bash, edit, write tools and session management";
