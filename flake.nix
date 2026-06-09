@@ -44,13 +44,13 @@
 
         pi = pkgs.buildNpmPackage {
           pname = "pi-coding-agent";
-          version = "0.78.0";
+          version = "0.79.0";
 
           src = pi-mono;
 
           # Hash covers all npm deps declared in the root package-lock.json.
           # Regenerate with:  nix build 2>&1 | awk '/got:/{print $2}'
-          npmDepsHash = "sha256-TxMiT7nJqLZRXKFoxb4FpsETGe3I99qU7olTgNsoQd4=";
+          npmDepsHash = "sha256-H+F/qzXilTXDHneKT3vms0MHi/E7+ahGh6zupFtMptU=";
 
           inherit nodejs;
 
