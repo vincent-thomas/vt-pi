@@ -2,7 +2,8 @@
  * git-commit extension
  *
  * 1. `git_commit` tool — checks default branch, runs pre-checks (static
- *    analysis, formatting), then commits with the provided message.
+ *    analysis, formatting), then commits the currently-staged changes with
+ *    the provided message. Does NOT stage anything itself.
  *
  * 2. Blocks ALL manual `git commit` in bash — the AI must use the tool.
  */
@@ -24,7 +25,8 @@ export default function (pi: ExtensionAPI) {
 		name: "git_commit",
 		label: "Git Commit",
 		description:
-			"Stage all changes and commit with the provided message. " +
+			"Commit the currently-staged changes with the provided message. " +
+			"Does NOT stage anything — run `git add` for the files you want first. " +
 			"Runs pre-commit checks (static analysis, formatting) before committing. " +
 			"Blocks commits on default branches (main/master). " +
 			"You MUST use this tool instead of running `git commit` in bash.",

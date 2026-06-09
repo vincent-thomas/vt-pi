@@ -195,9 +195,30 @@ export async function runPreChecks(
 // Git push
 // ---------------------------------------------------------------------------
 
-export async function gitPush(cwd: string, signal?: AbortSignal): Promise<PushResult> {
+/** Returns true if the current branch has an upstream tracking branch set. */
+async function hasUpstream(cwd: string, signal?: AbortSignal): Promise<boolean> {
 	try {
-		const { stdout, stderr } = await execAsync("git push", {
+		await execAsync("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
+			cwd,
+			timeout: 5_000,
+			signal,
+		});
+		return true;
+	} catch {
+		// Non-zero exit means no upstream is configured for this branch.
+		return false;
+	}
+}
+
+export async function gitPush(cwd: string, signal?: AbortSignal): Promise<PushResult> {
+	// A brand-new branch has no upstream, so a bare `git push` fails. In that
+	// case push and set the upstream in one go so first pushes succeed.
+	const command = (await hasUpstream(cwd, signal))
+		? "git push"
+		: "git push -u origin HEAD";
+
+	try {
+		const { stdout, stderr } = await execAsync(command, {
 			cwd,
 			timeout: 60_000,
 			signal,

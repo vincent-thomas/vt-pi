@@ -1,33 +1,40 @@
 /**
  * No Python Extension
  *
- * Blocks bash tool calls that execute inline Python code (e.g. `python3 -c "..."`).
+ * Blocks any bash tool call that executes Python, not just `python -c`.
+ * This covers:
+ *   - `python -c "..."`            inline code
+ *   - `python script.py`           running a script
+ *   - `python <<EOF … EOF`         heredocs
+ *   - `env python …` / `/usr/bin/python …` / `python3.12 …`
+ *   - the same anywhere in a pipeline or command substitution
+ *
  * Returns an explaining message to the model when a call is blocked.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-
-// Matches `python -c` or `python3 -c` with optional flags in between,
-// staying within the same shell command segment (no pipes/semicolons/newlines).
-const INLINE_PYTHON_PATTERN = /\bpython3?\b[^|&;\n]*\s-c\b/;
+import { findCommandUse, isPythonCommand } from "../lib/command-utils.ts";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
 
 		const command = event.input.command ?? "";
-		if (!INLINE_PYTHON_PATTERN.test(command)) return;
+		const hit = findCommandUse(command, isPythonCommand);
+		if (!hit) return;
 
 		if (ctx.hasUI) {
-			ctx.ui.notify("🐍 Blocked inline Python execution.", "warning");
+			ctx.ui.notify("🐍 Blocked Python execution.", "warning");
 		}
 
 		return {
 			block: true,
 			reason:
-				"Inline Python execution is not allowed (e.g. `python3 -c '...'`). " +
-				"Prefer to use other bash commands. For example when parsing json, use the 'jq' binary",
+				`Python execution is not allowed (blocked: \`${hit.segment}\`). ` +
+				`This covers \`python\`/\`python3\`, \`-c\` snippets, running scripts, ` +
+				`heredocs (\`python <<EOF\`), and \`env python …\`. ` +
+				`Prefer other bash tools — for example, use \`jq\` to parse JSON.`,
 		};
 	});
 }

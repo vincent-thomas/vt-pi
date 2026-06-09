@@ -88,6 +88,7 @@ suite("gitCommit", () => {
 		"commits staged changes",
 		withGitRepo(async (dir) => {
 			writeFileSync(join(dir, "file.txt"), "hello");
+			git("git add file.txt", dir);
 			const result = await gitCommit(dir, "add file");
 			assert.equal(result.success, true);
 			const log = git("git log --oneline -1", dir);
@@ -96,7 +97,7 @@ suite("gitCommit", () => {
 	);
 
 	test(
-		"fails when nothing to commit",
+		"fails when nothing is staged",
 		withGitRepo(async (dir) => {
 			const result = await gitCommit(dir, "empty commit");
 			assert.equal(result.success, false);
@@ -105,14 +106,19 @@ suite("gitCommit", () => {
 	);
 
 	test(
-		"stages all changes automatically",
+		"does NOT stage unstaged changes (leaves them in the working tree)",
 		withGitRepo(async (dir) => {
-			writeFileSync(join(dir, "a.txt"), "a");
-			writeFileSync(join(dir, "b.txt"), "b");
-			const result = await gitCommit(dir, "add two files");
+			writeFileSync(join(dir, "staged.txt"), "staged");
+			writeFileSync(join(dir, "unstaged.txt"), "unstaged");
+			git("git add staged.txt", dir);
+			const result = await gitCommit(dir, "only staged");
 			assert.equal(result.success, true);
+			// unstaged.txt must remain untracked, not swept into the commit.
 			const status = git("git status --porcelain", dir);
-			assert.equal(status, ""); // clean working tree
+			assert.ok(status.includes("?? unstaged.txt"));
+			const files = git("git show --name-only --oneline HEAD", dir);
+			assert.ok(files.includes("staged.txt"));
+			assert.ok(!files.includes("unstaged.txt"));
 		}),
 	);
 
@@ -120,6 +126,7 @@ suite("gitCommit", () => {
 		"handles message with single quotes",
 		withGitRepo(async (dir) => {
 			writeFileSync(join(dir, "file.txt"), "content");
+			git("git add file.txt", dir);
 			const result = await gitCommit(dir, "it's a test");
 			assert.equal(result.success, true);
 			const log = git("git log --oneline -1", dir);
@@ -128,10 +135,11 @@ suite("gitCommit", () => {
 	);
 
 	test(
-		"stages modified files",
+		"commits staged modifications",
 		withGitRepo(async (dir) => {
 			// init.txt already exists from withGitRepo
 			writeFileSync(join(dir, "init.txt"), "modified");
+			git("git add init.txt", dir);
 			const result = await gitCommit(dir, "modify init");
 			assert.equal(result.success, true);
 			const log = git("git log --oneline -1", dir);
@@ -140,9 +148,10 @@ suite("gitCommit", () => {
 	);
 
 	test(
-		"stages deleted files",
+		"commits staged deletions",
 		withGitRepo(async (dir) => {
 			rmSync(join(dir, "init.txt"));
+			git("git add -A", dir);
 			const result = await gitCommit(dir, "delete init");
 			assert.equal(result.success, true);
 			const log = git("git log --oneline -1", dir);

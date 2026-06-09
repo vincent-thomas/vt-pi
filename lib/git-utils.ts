@@ -6,6 +6,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { commandInvocation, splitCommandSegments } from "./command-utils.ts";
 
 // ---------------------------------------------------------------------------
 // Branch helpers
@@ -32,20 +33,19 @@ export function currentBranch(cwd: string): string | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Given a line matcher, scan an arbitrary block of text for matching git
- * commands. Handles multi-line scripts and compound commands (&&, ||, ;).
- * Skips comment lines. Returns the first match, or null.
+ * Given a segment matcher, scan an arbitrary block of text for matching git
+ * commands. Splitting (pipes, &&/||/;, command substitution, redirections,
+ * newlines) and command resolution (env prefixes, sudo/env wrappers, absolute
+ * paths) are handled by command-utils, so this sees through forms the old
+ * regex matcher missed. Returns the first matching segment (trimmed), or null.
  */
 export function findGitCommandInText(
 	text: string,
-	matcher: (line: string) => boolean,
+	matcher: (segment: string) => boolean,
 ): string | null {
-	for (const rawLine of text.split("\n")) {
-		for (const raw of rawLine.split(/&&|\|\||;/)) {
-			const line = raw.replace(/\s+/g, " ").trim();
-			if (line.startsWith("#")) continue;
-			if (matcher(line)) return line;
-		}
+	for (const seg of splitCommandSegments(text)) {
+		const trimmed = seg.trim();
+		if (trimmed && matcher(trimmed)) return trimmed;
 	}
 	return null;
 }
@@ -56,7 +56,7 @@ export function findGitCommandInText(
 export function findGitCommandInScript(
 	scriptPath: string,
 	cwd: string,
-	matcher: (line: string) => boolean,
+	matcher: (segment: string) => boolean,
 ): string | null {
 	try {
 		const abs = resolve(cwd, scriptPath);
@@ -68,22 +68,55 @@ export function findGitCommandInScript(
 }
 
 // ---------------------------------------------------------------------------
-// Line matchers
+// Subcommand matchers
 // ---------------------------------------------------------------------------
 
-/** Matches if the line starts with `git` (or `sudo git`) as the actual command. */
-function isGitCommand(line: string): boolean {
-	return /^\s*(?:sudo\s+(?:-[a-zA-Z]\S*\s+)*)?git\s/.test(line);
+// Git global options (before the subcommand) that consume the FOLLOWING token
+// as their value, e.g. `git -C <path> push`, `git -c <name=value> commit`.
+// These must be skipped so the real subcommand is found.
+const GIT_VALUE_OPTS = new Set([
+	"-C",
+	"-c",
+	"--git-dir",
+	"--work-tree",
+	"--namespace",
+	"--exec-path",
+	"--super-prefix",
+	"--config-env",
+]);
+
+/**
+ * Given the tokens that follow `git`, return the git subcommand (lowercased),
+ * skipping git's global options. Returns null if no subcommand is present.
+ */
+function gitSubcommand(args: string[]): string | null {
+	let i = 0;
+	while (i < args.length) {
+		const tok = args[i];
+		if (tok.startsWith("-")) {
+			// Value-taking option in separate form → also skip its value.
+			i += GIT_VALUE_OPTS.has(tok) ? 2 : 1;
+			continue;
+		}
+		return tok.toLowerCase();
+	}
+	return null;
 }
 
-/** Returns true if the line is a `git push` invocation. */
-export function isGitPushLine(line: string): boolean {
-	return isGitCommand(line) && /\bgit\s+push\b/.test(line);
+/** Returns true if the segment invokes `git <sub>`, seeing through wrappers/prefixes. */
+function isGitSubcommand(segment: string, sub: string): boolean {
+	const inv = commandInvocation(segment);
+	return inv?.name === "git" && gitSubcommand(inv.args) === sub;
 }
 
-/** Returns true if the line is a `git commit` invocation. */
-export function isGitCommitLine(line: string): boolean {
-	return isGitCommand(line) && /\bgit\s+commit\b/.test(line);
+/** Returns true if the segment is a `git push` invocation. */
+export function isGitPushLine(segment: string): boolean {
+	return isGitSubcommand(segment, "push");
+}
+
+/** Returns true if the segment is a `git commit` invocation. */
+export function isGitCommitLine(segment: string): boolean {
+	return isGitSubcommand(segment, "commit");
 }
 
 // ---------------------------------------------------------------------------

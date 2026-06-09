@@ -63,7 +63,9 @@ function shellEscape(s: string): string {
 }
 
 /**
- * Stage all changes and commit with the given message.
+ * Commit the currently-staged changes with the given message.
+ * Does NOT stage anything itself — the caller is responsible for staging
+ * (e.g. with `git add`) beforehand.
  * Async to avoid blocking the event loop.
  */
 export async function gitCommit(
@@ -71,22 +73,18 @@ export async function gitCommit(
 	message: string,
 	signal?: AbortSignal,
 ): Promise<CommitResult> {
-	// Stage all changes first.
-	try {
-		await execAsync("git add -A", { cwd, timeout: 15_000, signal });
-	} catch (err: unknown) {
-		return { success: false, output: extractErrorOutput(err) };
-	}
-
 	// Check if there's anything staged.
 	try {
-		const { stdout } = await execAsync("git diff --cached --quiet", {
+		await execAsync("git diff --cached --quiet", {
 			cwd,
 			timeout: 5_000,
 			signal,
 		});
 		// Exit 0 means no staged changes.
-		return { success: false, output: "Nothing to commit — no staged changes." };
+		return {
+			success: false,
+			output: "Nothing to commit — no staged changes. Stage files with `git add` first.",
+		};
 	} catch {
 		// Exit 1 means there ARE staged changes — proceed.
 	}

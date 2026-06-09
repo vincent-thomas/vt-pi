@@ -15,6 +15,7 @@ import {
 	allSuitesComplete,
 	detectProjects,
 	hasUnpushedCommits,
+	gitPush,
 } from "./logic.ts";
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,13 @@ suite("isGitPushLine — blocked", () => {
 		"git push --force-with-lease",
 		"sudo git push",
 		"sudo -n git push origin main",
+		// Forms the old regex matcher missed:
+		"git -C /tmp/repo push",
+		"git -c user.name=x push",
+		"GIT_DIR=.git git push",
+		"env git push",
+		"/usr/bin/git push origin main",
+		"\\git push",
 	];
 	for (const c of cases) {
 		test(JSON.stringify(c), () => assert.ok(isGitPushLine(c)));
@@ -425,6 +433,47 @@ suite("hasUnpushedCommits", () => {
 			git("git push", local);
 			const result = await hasUnpushedCommits(local);
 			assert.equal(result, false);
+		}),
+	);
+});
+
+// ---------------------------------------------------------------------------
+// gitPush
+// ---------------------------------------------------------------------------
+
+suite("gitPush", () => {
+	test(
+		"pushes commits on an already-tracked branch",
+		withGitRepos(async (local) => {
+			writeFileSync(join(local, "new.txt"), "new");
+			git("git add .", local);
+			git("git commit -m 'new file'", local);
+
+			const result = await gitPush(local);
+			assert.equal(result.success, true);
+			assert.equal(await hasUnpushedCommits(local), false);
+		}),
+	);
+
+	test(
+		"pushes a brand-new branch with no upstream (sets upstream)",
+		withGitRepos(async (local) => {
+			git("git checkout -b feature/new", local);
+			writeFileSync(join(local, "branch.txt"), "branch");
+			git("git add .", local);
+			git("git commit -m 'branch commit'", local);
+
+			// No upstream is configured for this branch yet.
+			const result = await gitPush(local);
+			assert.equal(result.success, true, result.output);
+
+			// Upstream is now set and there's nothing left to push.
+			const upstream = git(
+				"git rev-parse --abbrev-ref --symbolic-full-name @{u}",
+				local,
+			);
+			assert.equal(upstream, "origin/feature/new");
+			assert.equal(await hasUnpushedCommits(local), false);
 		}),
 	);
 });
