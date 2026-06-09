@@ -20,11 +20,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1780243769,
-        "narHash": "sha256-x5UQuRsH3MqI0U9afaXSNqzTPSeZlRLvFAav2Ux1pNw=",
+        "lastModified": 1780749050,
+        "narHash": "sha256-3av0pIjlOWQ6rDbNOmpUSvbNnJkGORQKKjb4LtCZsIY=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "331800de5053fcebacf6813adb5db9c9dca22a0c",
+        "rev": "a799d3e3886da994fa307f817a6bc705ae538eeb",
         "type": "github"
       },
       "original": {
@@ -37,16 +37,16 @@
     "pi-mono": {
       "flake": false,
       "locked": {
-        "lastModified": 1780441621,
-        "narHash": "sha256-8vIg/q+z7nS80FLv3HvijhD30klA9Y92FMhKPZhYcNU=",
-        "owner": "badlogic",
-        "repo": "pi-mono",
-        "rev": "564ad70fb84de3eb2450f378660242b679f28e69",
+        "lastModified": 1781007788,
+        "narHash": "sha256-v/tDZHe7ZSOyjirIBC7T0SOMgHG3X0J+FOlnm4XMS/Y=",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "c5582102f51b143fadc05180e0f8aed050e923b3",
         "type": "github"
       },
       "original": {
-        "owner": "badlogic",
-        "repo": "pi-mono",
+        "owner": "earendil-works",
+        "repo": "pi",
         "type": "github"
       }
     },
