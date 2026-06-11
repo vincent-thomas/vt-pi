@@ -383,6 +383,7 @@ export async function pollChecks(
 	let polls = 0;
 	let emptyPolls = 0;
 	let settlingPolls = 0;
+	let allChecksCompletedOnce = false;
 
 	while (polls < MAX_POLLS) {
 		if (signal?.aborted) {
@@ -417,7 +418,12 @@ export async function pollChecks(
 				onStatus?.(`All ${total} checks finished for ${mode}.`);
 				return { checks, timedOut: false, polls, mode };
 			}
-			if (pending === 0 && !suitesComplete) {
+			// Track if we've ever seen all checks complete to avoid API blips resetting progress
+			if (pending === 0) {
+				allChecksCompletedOnce = true;
+			}
+			// Once all checks have completed at least once, start settling grace period
+			if (allChecksCompletedOnce && !suitesComplete) {
 				settlingPolls++;
 				if (settlingPolls >= EMPTY_GRACE_POLLS) {
 					onStatus?.(
@@ -425,8 +431,6 @@ export async function pollChecks(
 					);
 					return { checks, timedOut: false, polls, mode };
 				}
-			} else {
-				settlingPolls = 0;
 			}
 			const note = suitesComplete ? "" : " (suites still settling)";
 			onStatus?.(
