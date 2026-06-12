@@ -15,6 +15,7 @@ export const BANNED_COMMANDS: Record<string, string> = {
 	cat: "Use the `read` tool to view file contents.",
 	tee: "Use the `write` or `edit` tool to write file contents.",
 	sed: "Use the `edit` tool for find-and-replace edits.",
+	awk: "Use the `read` tool with offset/limit parameters to read specific lines, or `bash` with simpler tools like `head`, `tail`, `wc`, or `grep`.",
 };
 
 export const BANNED_NAMES: ReadonlySet<string> = new Set(Object.keys(BANNED_COMMANDS));

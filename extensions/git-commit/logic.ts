@@ -50,6 +50,32 @@ function execAsync(
 }
 
 // ---------------------------------------------------------------------------
+// Branch checks
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if the current branch exists on the remote.
+ * Returns true if branch exists on remote, false otherwise.
+ */
+export async function branchExistsOnRemote(
+	cwd: string,
+	branch: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	try {
+		const { stdout } = await execAsync(
+			`git ls-remote --heads origin ${branch}`,
+			{ cwd, timeout: 10_000, signal },
+		);
+		// ls-remote returns empty if branch doesn't exist
+		return stdout.trim().length > 0;
+	} catch {
+		// If git fails, assume branch doesn't exist
+		return false;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Git commit
 // ---------------------------------------------------------------------------
 

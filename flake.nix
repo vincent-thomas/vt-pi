@@ -29,7 +29,7 @@
         # co-located under the same ${./extensions} Nix store path, keeping
         # relative imports intact at test-run time.
         testRelPaths = map (f: lib.removePrefix (toString ./extensions + "/") (toString f)) (
-          lib.filter (f: lib.hasSuffix ".test.ts" (builtins.baseNameOf (toString f))) (
+          lib.filter (f: lib.hasSuffix ".test.ts" (baseNameOf (toString f))) (
             lib.filesystem.listFilesRecursive ./extensions
           )
         );

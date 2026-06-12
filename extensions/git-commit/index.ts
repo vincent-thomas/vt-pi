@@ -16,7 +16,7 @@ import {
 	extractScriptPaths,
 	currentBranch,
 } from "../../lib/git-utils.ts";
-import { isDefaultBranch } from "./logic.ts";
+import { isDefaultBranch, branchExistsOnRemote } from "./logic.ts";
 import { runPreChecks, gitCommit } from "./logic.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -55,7 +55,22 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// 2. Pre-commit checks.
+			// 2. Check if branch exists on remote.
+			if (branch && !(await branchExistsOnRemote(cwd, branch, signal))) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text:
+								`Branch "${branch}" does not exist on remote. ` +
+								`Push it first with \`git push -u origin ${branch}\` or use push_and_check_ci, ` +
+								`then commit additional changes.`,
+						},
+					],
+				};
+			}
+
+			// 3. Pre-commit checks.
 			const completedSteps: string[] = [];
 			onUpdate?.({
 				content: [{ type: "text", text: "Running pre-commit checks…" }],
@@ -89,7 +104,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// 3. Stage and commit.
+			// 4. Commit.
 			if (preCheck.steps.length > 0) {
 				completedSteps.push("Committing…");
 				onUpdate?.({
