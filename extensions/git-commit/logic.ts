@@ -54,6 +54,26 @@ function execAsync(
 // ---------------------------------------------------------------------------
 
 /**
+ * Check if the current branch has an upstream tracking branch configured.
+ */
+export async function hasUpstreamBranch(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	try {
+		await execAsync("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
+			cwd,
+			timeout: 5_000,
+			signal,
+		});
+		return true;
+	} catch {
+		// Non-zero exit means no upstream is configured
+		return false;
+	}
+}
+
+/**
  * Check if the current branch exists on the remote.
  * Returns true if branch exists on remote, false otherwise.
  */

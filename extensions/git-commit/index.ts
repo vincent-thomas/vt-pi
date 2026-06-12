@@ -16,7 +16,7 @@ import {
 	extractScriptPaths,
 	currentBranch,
 } from "../../lib/git-utils.ts";
-import { isDefaultBranch, branchExistsOnRemote } from "./logic.ts";
+import { isDefaultBranch, hasUpstreamBranch, branchExistsOnRemote } from "./logic.ts";
 import { runPreChecks, gitCommit } from "./logic.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -55,19 +55,21 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// 2. Check if branch exists on remote.
-			if (branch && !(await branchExistsOnRemote(cwd, branch, signal))) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text:
-								`Branch "${branch}" does not exist on remote. ` +
-								`Push it first with \`git push -u origin ${branch}\` or use push_and_check_ci, ` +
-								`then commit additional changes.`,
-						},
-					],
-				};
+			// 2. Check if branch exists on remote (only if it has an upstream).
+			if (branch && (await hasUpstreamBranch(cwd, signal))) {
+				if (!(await branchExistsOnRemote(cwd, branch, signal))) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text:
+									`Branch "${branch}" has an upstream configured but does not exist on remote. ` +
+									`This may indicate a deleted remote branch. Push it with \`push_and_check_ci\` or ` +
+									`\`git push -u origin ${branch}\`.`,
+							},
+						],
+					};
+				}
 			}
 
 			// 3. Pre-commit checks.
