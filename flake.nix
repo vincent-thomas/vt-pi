@@ -118,9 +118,13 @@
 
             # Build --extension / --skill flags for every bundled item.
             # pi accepts both file and directory paths for each flag.
+            # Skip test files (*.test.ts) - they're for build-time validation only.
             extra_flags=""
             for ext in "$out/share/pi/extensions"/*; do
-              extra_flags="$extra_flags --extension $ext"
+              case "$(basename "$ext")" in
+                *.test.ts) ;; # Skip test files
+                *) extra_flags="$extra_flags --extension $ext" ;;
+              esac
             done
             for skill in "$out/share/pi/skills"/*; do
               extra_flags="$extra_flags --skill $skill"
