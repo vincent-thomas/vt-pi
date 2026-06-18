@@ -30,6 +30,12 @@ const WRAPPERS = new Set([
 	"doas",
 ]);
 
+const WRAPPER_FLAGS_WITH_VALUE: Record<string, ReadonlySet<string>> = {
+	nice: new Set(["-n", "--adjustment"]),
+	ionice: new Set(["-c", "--class", "-n", "--classdata", "--pid"]),
+	stdbuf: new Set(["-i", "-o", "-e"]),
+};
+
 /**
  * Split a shell command line into the individual runnable segments. Splits on
  * sequence/pipe operators, newlines, subshell + command-substitution
@@ -40,7 +46,82 @@ const WRAPPERS = new Set([
  * single-char prefixes so they win the alternation.
  */
 export function splitCommandSegments(text: string): string[] {
-	return text.split(/&&|\|\||\$\(|[\n;|&()`<>{}]/);
+	const segments: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | null = null;
+	let escape = false;
+	let skipRedirectionTarget = false;
+
+	function pushCurrent() {
+		segments.push(current);
+		current = "";
+	}
+
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		const next = text[i + 1];
+
+		if (skipRedirectionTarget) {
+			if (/\s/.test(ch)) continue;
+			while (i < text.length && !/[\s;|&()`<>{}]/.test(text[i])) i++;
+			i--;
+			skipRedirectionTarget = false;
+			continue;
+		}
+
+		if (escape) {
+			current += ch;
+			escape = false;
+			continue;
+		}
+
+		if (ch === "\\") {
+			current += ch;
+			escape = true;
+			continue;
+		}
+
+		if (quote) {
+			current += ch;
+			if (ch === quote) quote = null;
+			continue;
+		}
+
+		if (ch === "'" || ch === '"') {
+			current += ch;
+			quote = ch;
+			continue;
+		}
+
+		if ((ch === "&" && next === "&") || (ch === "|" && next === "|")) {
+			pushCurrent();
+			i++;
+			continue;
+		}
+
+		if (ch === "$" && next === "(") {
+			pushCurrent();
+			i++;
+			continue;
+		}
+
+		if (ch === "<" || ch === ">") {
+			pushCurrent();
+			if (next === "<" || next === ">") i++;
+			skipRedirectionTarget = true;
+			continue;
+		}
+
+		if (/[\n;|&()`{}]/.test(ch)) {
+			pushCurrent();
+			continue;
+		}
+
+		current += ch;
+	}
+
+	segments.push(current);
+	return segments;
 }
 
 /**
@@ -68,7 +149,9 @@ export function commandInvocation(segment: string): { name: string; args: string
 			i++;
 			// Skip the wrapper's own option flags and inline assignments.
 			while (i < tokens.length && (tokens[i].startsWith("-") || ENV_ASSIGN.test(tokens[i]))) {
+				const flag = tokens[i];
 				i++;
+				if (WRAPPER_FLAGS_WITH_VALUE[base]?.has(flag) && i < tokens.length) i++;
 			}
 			continue;
 		}
