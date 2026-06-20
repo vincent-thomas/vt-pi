@@ -309,8 +309,7 @@ suite("detectProjects", () => {
 			const projects = detectProjects(dir);
 			assert.equal(projects.length, 1);
 			assert.equal(projects[0].name, "rust");
-			assert.ok(projects[0].checks.includes("cargo check"));
-			assert.ok(projects[0].checks.includes("cargo fmt --check"));
+			assert.deepEqual(projects[0].checks, ["cargo check"]);
 		}));
 
 	test("package.json → node", () =>

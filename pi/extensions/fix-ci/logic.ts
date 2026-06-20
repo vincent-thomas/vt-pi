@@ -112,7 +112,7 @@ const PROJECT_TYPES: {
 		markers: ["Cargo.toml"],
 		project: {
 			name: "rust",
-			checks: ["cargo check", "cargo fmt --check"],
+			checks: ["cargo check"],
 		},
 	},
 	{

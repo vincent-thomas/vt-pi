@@ -35,7 +35,7 @@ export default function (pi: ExtensionAPI) {
 		name: "push_and_check_ci",
 		label: "Push & Check CI",
 		description:
-			"Run local pre-push checks (static analysis, formatting), push the " +
+			"Run local pre-push checks (static analysis), push the " +
 			"current branch to origin, then poll GitHub Actions checks until they " +
 			"all finish. Returns the status of every check. For failures, includes " +
 			"the last 200 lines of log output. " +
@@ -55,7 +55,7 @@ export default function (pi: ExtensionAPI) {
 				cycleCount++;
 				const cycle = cycleCount;
 
-				// 1. Pre-push checks (static analysis, formatting)
+				// 1. Pre-push checks (static analysis)
 				const completedSteps: string[] = [];
 				onUpdate?.({
 					content: [{ type: "text", text: "Running pre-push checks…" }],
