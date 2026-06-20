@@ -3,7 +3,6 @@
  */
 
 import { CommandPolicyStatus, type CommandPolicyEntry } from "../../lib/command-policy-types.ts";
-import { isAwkCommand } from "../../lib/command-utils.ts";
 
 export const COMMAND_POLICY_SYSTEM_PROMPT = `
 Only run shell commands that are explicitly allowed by the command policy.
@@ -14,6 +13,8 @@ write/edit for file changes, rg for search, and fd for file discovery.
 `;
 
 export const COMMAND_POLICY_ENTRIES: CommandPolicyEntry[] = [
+	{ name: "sudo", status: CommandPolicyStatus.Banned, command: "sudo", description: "It is banned to try to gain superuser access" },
+	{ name: "doas", status: CommandPolicyStatus.Banned, command: "sudo", description: "It is banned to try to gain superuser access" },
 	{ name: "cat", status: CommandPolicyStatus.Banned, command: "cat", description: "Use the read tool to view file contents." },
 	{ name: "grep", status: CommandPolicyStatus.Banned, command: "grep", description: "Use rg for searching instead." },
 	{ name: "find", status: CommandPolicyStatus.Banned, command: "find", description: "Use fd for file discovery instead." },

@@ -56,6 +56,34 @@
             # The root build script also handles chmod and copy-assets for us.
             npm run build
 
+            # ── Post-build npm audit ────────────────────────────────────────
+            # Check the full dependency tree for known CVEs. The lockfile pins
+            # tarball hashes (npmDepsHash), but a CVE can exist in a hash-verified
+            # dependency — only a registry query catches those.
+            #
+            # Nix's sandbox may block network; if so, skip gracefully.
+            echo ""
+            echo "--- npm audit ---"
+            # Capture exit code via || (works even with shell -e: the ||
+            # chain means set -e never kills the build). Exit 0 = no vulns
+            # at audit_level, 1 = vulns found, 2+ = error (no network).
+            audit_exit=0
+            npm audit --audit-level=high --json 2>&1 >/tmp/npm-audit.json || audit_exit=$?
+            if [ -f /tmp/npm-audit.json ] && [ -s /tmp/npm-audit.json ]; then
+              if [ "$audit_exit" -eq 0 ]; then
+                echo "npm audit: no high/critical vulnerabilities"
+              elif [ "$audit_exit" -eq 1 ]; then
+                ADVISORY_COUNT=$(grep -o '"advisoryCount":[0-9]*' /tmp/npm-audit.json |\
+                  grep -o '[0-9]*' || echo 0)
+                echo "⚠  npm audit: $ADVISORY_COUNT high/critical advisory(ies) found"
+                echo ""
+                echo "  Run locally to inspect:  npm audit --audit-level=high"
+              fi
+            else
+              echo "npm audit: registry unreachable (no network in Nix sandbox)"
+              echo "  Run locally to check:  npm audit --audit-level=high"
+            fi
+
             runHook postBuild
           '';
 

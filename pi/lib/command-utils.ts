@@ -16,7 +16,6 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=.*$/;
 // Wrappers that delegate to a following command. We skip past these (and any
 // option flags they carry) to reach the actual command being executed.
 const WRAPPERS = new Set([
-	"sudo",
 	"env",
 	"command",
 	"exec",
@@ -27,7 +26,6 @@ const WRAPPERS = new Set([
 	"stdbuf",
 	"setsid",
 	"ionice",
-	"doas",
 ]);
 
 const WRAPPER_FLAGS_WITH_VALUE: Record<string, ReadonlySet<string>> = {
@@ -63,8 +61,17 @@ export function splitCommandSegments(text: string): string[] {
 
 		if (skipRedirectionTarget) {
 			if (/\s/.test(ch)) continue;
-			while (i < text.length && !/[\s;|&()`<>{}]/.test(text[i])) i++;
-			i--;
+			// Handle FD duplication: >&n, <&n, <&-, and &> combined redirect
+			if (ch === "&") {
+				i++; // advance past &
+				// Consume FD number (digits or - for <&-) or filename after &
+				while (i < text.length && !/[\s;|&()`<>{}]/.test(text[i])) i++;
+				i--;
+			} else {
+				// Regular file/directory path after > or <
+				while (i < text.length && !/[\s;|&()`<>{}]/.test(text[i])) i++;
+				i--;
+			}
 			skipRedirectionTarget = false;
 			continue;
 		}
@@ -106,6 +113,9 @@ export function splitCommandSegments(text: string): string[] {
 		}
 
 		if (ch === "<" || ch === ">") {
+			// Strip trailing FD number before redirection
+			// (e.g., `2>` in `cmd 2>file`, `1>>` in `cmd 1>>file`)
+			current = current.replace(/(\s+)\d+$/, "$1");
 			pushCurrent();
 			if (next === "<" || next === ">") i++;
 			skipRedirectionTarget = true;

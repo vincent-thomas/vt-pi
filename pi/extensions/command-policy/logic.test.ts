@@ -44,9 +44,9 @@ function commandNames(text: string): string[] {
 suite("commandInvocation — executable resolution");
 const invocationCases = [
 	["cat file", "cat", ["file"]],
-	["sudo cat /etc/x", "cat", ["/etc/x"]],
-	["sudo -n -- cat /etc/x", "cat", ["/etc/x"]],
-	["doas cat /etc/x", "cat", ["/etc/x"]],
+	["sudo cat /etc/x", "sudo", ["cat", "/etc/x"]],
+	["sudo -n -- cat /etc/x", "sudo", ["-n", "--", "cat", "/etc/x"]],
+	["doas cat /etc/x", "doas", ["cat", "/etc/x"]],
 	["env python -c 'x'", "python", ["-c", "'x'"]],
 	["env -i FOO=bar python script.py", "python", ["script.py"]],
 	["FOO=bar PYTHONPATH=. tee out", "tee", ["out"]],

@@ -106,7 +106,22 @@ function gitSubcommand(args: string[]): string | null {
 /** Returns true if the segment invokes `git <sub>`, seeing through wrappers/prefixes. */
 function isGitSubcommand(segment: string, sub: string): boolean {
 	const inv = commandInvocation(segment);
-	return inv?.name === "git" && gitSubcommand(inv.args) === sub;
+
+	// Banned prefix commands (sudo, doas, …) are no longer stripped by
+	// commandInvocation, so if the resolved command is one of those, find
+	// "git" in the remaining args and check the subcommand that follows.
+	if (inv?.name === "sudo" || inv?.name === "doas") {
+		const gitIdx = inv.args.indexOf("git");
+		if (gitIdx !== -1) {
+			return gitSubcommand(inv.args.slice(gitIdx + 1)) === sub;
+		}
+		return false;
+	}
+
+	if (inv?.name === "git") {
+		return gitSubcommand(inv.args) === sub;
+	}
+	return false;
 }
 
 /** Returns true if the segment is a `git push` invocation. */
