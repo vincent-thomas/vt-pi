@@ -66,6 +66,7 @@ export const COMMAND_POLICY_ENTRIES: CommandPolicyEntry[] = [
 	{ name: "true", status: CommandPolicyStatus.Allowed, command: "true" },
 	{ name: "false", status: CommandPolicyStatus.Allowed, command: "false" },
 	{ name: "test", status: CommandPolicyStatus.Allowed, command: "test" },
+	{ name: "cd", status: CommandPolicyStatus.Allowed, command: "cd" },
 	{ name: "mkdir", status: CommandPolicyStatus.Allowed, command: "mkdir" },
 	{ name: "rm", status: CommandPolicyStatus.Allowed, command: "rm", bannedFlags: ["-r", "-R", "-rf", "-fr", "--recursive"] },
 	{ name: "cp", status: CommandPolicyStatus.Allowed, command: "cp", bannedFlags: ["-r", "-R", "--recursive"] },

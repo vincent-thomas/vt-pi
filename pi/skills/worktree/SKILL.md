@@ -1,70 +1,99 @@
 ---
 name: worktree
-description: Create, manage, and clean up git worktrees for isolated branch development. Use when starting new work or cleaning up after CI passes.
+description: Create, manage, and clean up git worktrees for isolated branch development. Use when starting new work, switching between branches, or cleaning up after CI passes.
 ---
 
 # Git Worktree Workflow
 
 Worktrees let you work on multiple branches simultaneously in separate directories.
-Use them to keep every feature/fix branch fully isolated from your main checkout.
+Each worktree is a full checkout on its own branch, sibling to the main repo.
 
-## Setup
+## Detect the layout
 
-Ensure the worktree directory exists:
+Always start by understanding the layout:
 
 ```bash
-mkdir -p ../pi-worktrees
+git worktree list
 ```
+
+Output example:
+```
+/Users/vt/personal/vt-pi            abc1234 [main]
+/Users/vt/personal/pi-worktrees/feat-x   def5678 [feat/x]
+```
+
+The **first entry** is the main checkout. Worktrees live in a sibling `pi-worktrees/` directory.
 
 ---
 
 ## `/skill:worktree init <name>`
 
-Create a branch and a corresponding worktree in one step.
+Create a new branch and worktree from the latest `main`:
 
 ```bash
-# Create branch off main (fetches latest main first)
+# 1. Find the worktree root — parent of the main repo
+MAIN_DIR=$(git worktree list | head -1 | awk '{print $1}')
+WTDIR=$(dirname "$MAIN_DIR")/pi-worktrees
+mkdir -p "$WTDIR"
+
+# 2. Fetch latest main
 git fetch origin main
+
+# 3. Create the branch off origin/main
 git branch <name> origin/main
 
-# Create worktree in ../pi-worktrees/<name>
-git worktree add ../pi-worktrees/<name> <name>
+# 4. Create the worktree
+git worktree add "$WTDIR/<name>" <name>
 ```
 
-Then change into the worktree directory:
-
-```bash
-cd ../pi-worktrees/<name>
-```
-
-Run `ls` to orient yourself. The worktree is a full working copy of the repo on that branch.
-
-All subsequent work (read, edit, stage, commit) happens inside this directory.
+The feature now lives at `$WTDIR/<name>/`. Use `git -C` or `cd` to operate there.
 
 ---
 
-## `/skill:worktree push`
+## Operating on a worktree (from the main repo)
 
-From inside the worktree directory, push and verify CI in one step:
+### Git operations
 
 ```bash
-# push_and_check_ci handles git push + CI polling
-# It auto-detects new branches and sets upstream
+git -C ../pi-worktrees/<name> status
+git -C ../pi-worktrees/<name> add src/file.ts
+git -C ../pi-worktrees/<name> diff --cached
 ```
 
-Use `push_and_check_ci` (not raw `git push` — that's blocked).
+### File operations
+
+Use the `read` tool: `../pi-worktrees/<name>/src/file.ts`
+Use the `edit` tool: `../pi-worktrees/<name>/src/file.ts`
+
+### Committing
+
+```bash
+git -C ../pi-worktrees/<name> add <files>
+```
+
+Then call the `git_commit` tool — it reads branch info from cwd, so chain with `cd`:
+
+```bash
+cd ../pi-worktrees/<name> && pwd
+```
+
+### Pushing & CI
+
+Use `push_and_check_ci` — it handles `git push -u origin HEAD` for new branches and polls CI.
 
 ---
 
 ## `/skill:worktree cleanup <name>`
 
-After CI is green, clean up the worktree:
+After CI is green and the branch is merged:
 
 ```bash
-cd /Users/vt/personal/vt-pi  # back to main repo
-git worktree remove ../pi-worktrees/<name>
-git branch -d <name>          # only if merged
-git worktree prune            # tidy up
+MAIN_DIR=$(git worktree list | head -1 | awk '{print $1}')
+WTDIR=$(dirname "$MAIN_DIR")/pi-worktrees
+
+git worktree remove "$WTDIR/<name>"
+git branch -d <name>
+git worktree prune
 ```
 
 **Only clean up after CI is green and you've confirmed with the user.**
