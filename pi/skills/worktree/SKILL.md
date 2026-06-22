@@ -46,40 +46,62 @@ git branch <name> origin/main
 git worktree add "$WTDIR/<name>" <name>
 ```
 
-The feature now lives at `$WTDIR/<name>/`. Use `git -C` or `cd` to operate there.
+The feature now lives at `$WTDIR/<name>/`. 
+
+Next, **lock into the worktree** so all your tools route there automatically:
+
+```
+/worktree-enter <name>
+```
+
+This sets up automatic routing:
+- File paths (read, write, edit) are relative to the worktree root
+- Bash commands get `cd <worktree> &&` prepended automatically
+- `worktree_commit` replaces `git_commit`
+- `worktree_push` replaces `push_and_check_ci`
+- A 🔒 status indicator appears in the footer
 
 ---
 
-## Operating on a worktree (from the main repo)
+## Operating while locked
 
-### Git operations
+When locked, just work normally — the extension handles routing:
+
+```bash
+git status          # auto-runs: cd <worktree> && git status
+git add src/file.ts # auto-runs: cd <worktree> && git add src/file.ts
+```
+
+Read/edit files using paths relative to the worktree root:
+```
+read src/file.ts    # reads <worktree>/src/file.ts
+```
+
+Commit and push using the worktree-specific tools:
+```
+worktree_commit      # commits staged changes in the worktree
+worktree_push        # pushes and polls CI
+```
+
+## Leaving the worktree
+
+When done (CI is green, branch is merged), leave the lock:
+
+```
+/worktree-leave
+```
+
+This restores `git_commit` and `push_and_check_ci` and removes the lock.
+
+---
+
+## Operating without locking (quick ops from main repo)
+
+If you just need a quick status check without locking, use `git -C`:
 
 ```bash
 git -C ../pi-worktrees/<name> status
-git -C ../pi-worktrees/<name> add src/file.ts
-git -C ../pi-worktrees/<name> diff --cached
 ```
-
-### File operations
-
-Use the `read` tool: `../pi-worktrees/<name>/src/file.ts`
-Use the `edit` tool: `../pi-worktrees/<name>/src/file.ts`
-
-### Committing
-
-```bash
-git -C ../pi-worktrees/<name> add <files>
-```
-
-Then call the `git_commit` tool — it reads branch info from cwd, so chain with `cd`:
-
-```bash
-cd ../pi-worktrees/<name> && pwd
-```
-
-### Pushing & CI
-
-Use `push_and_check_ci` — it handles `git push -u origin HEAD` for new branches and polls CI.
 
 ---
 

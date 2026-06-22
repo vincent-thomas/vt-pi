@@ -61,9 +61,16 @@ read ../pi-worktrees/feat-x/src/file.ts
 
 ### Workflow steps
 1. **Create a branch + worktree** (see `/skill:worktree init <name>`)
-2. **Read before editing** — always read the files you're about to change before making changes
-3. **Edit surgically** — use `edit`, not `write`, for existing files. Stage only the files your change touches.
-4. **Commit granularly** — each commit is one logical unit. Use `git_commit` tool. Messages: prefix with type (`feat:`, `fix:`, `refactor:`, `docs:`, `style:`, `test:`, `chore:`).
-5. **Push & verify CI** — use `push_and_check_ci`. It runs pre-push checks, pushes, then polls GitHub until all checks finish.
-6. **Fix CI failures** — if CI fails, fix surgically and re-push. The tool cycles up to 3 times.
-7. **Clean up worktree** — after CI is green, see `/skill:worktree cleanup <name>`.
+2. **Lock into the worktree** — run `/worktree-enter <name>`. This changes your working context:
+   - All file paths (read, write, edit) become relative to the worktree
+   - All bash commands auto-cd into the worktree directory
+   - `worktree_commit` replaces `git_commit` (commits in the worktree)
+   - `worktree_push` replaces `push_and_check_ci` (pushes from the worktree)
+   - A 🔒 status indicator shows you're locked
+3. **Read before editing** — always read the files you're about to change before making changes
+4. **Edit surgically** — use `edit`, not `write`, for existing files. Stage only the files your change touches.
+5. **Commit granularly** — each commit is one logical unit. Use `worktree_commit` (or `git_commit` if unlocked). Messages: prefix with type (`feat:`, `fix:`, `refactor:`, `docs:`, `style:`, `test:`, `chore:`).
+6. **Push & verify CI** — use `worktree_push` (or `push_and_check_ci` if unlocked). Runs pre-push checks, pushes, polls GitHub.
+7. **Fix CI failures** — if CI fails, fix surgically and re-push. The tool cycles up to 3 times.
+8. **Leave the worktree** — run `/worktree-leave`. This restores `git_commit` and `push_and_check_ci`.
+9. **Clean up worktree** — after CI is green and the branch is merged, see `/skill:worktree cleanup <name>`.
