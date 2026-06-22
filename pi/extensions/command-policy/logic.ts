@@ -96,4 +96,13 @@ export const COMMAND_POLICY_ENTRIES: CommandPolicyEntry[] = [
 	{ name: "git rev-parse", status: CommandPolicyStatus.Allowed, command: "git", subcommand: ["rev-parse"] },
 	{ name: "git merge-base", status: CommandPolicyStatus.Allowed, command: "git", subcommand: ["merge-base"] },
 	{ name: "git commit", status: CommandPolicyStatus.Allowed, command: "git", subcommand: ["commit"] },
+	{ name: "git worktree", status: CommandPolicyStatus.Allowed, command: "git", subcommand: ["worktree"] },
+	{
+		name: "git fetch",
+		status: CommandPolicyStatus.Allowed,
+		command: "git",
+		subcommand: ["fetch"],
+		description: "Fetch origin to get latest main before branching.",
+	},
+	{ name: "git rm", status: CommandPolicyStatus.Allowed, command: "git", subcommand: ["rm"] },
 ];
