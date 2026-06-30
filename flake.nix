@@ -27,13 +27,13 @@
         # ── 1. Base Pi package (upstream, no customizations) ─────────────────────
         piBase = pkgs.buildNpmPackage {
           pname = "pi-coding-agent";
-          version = "0.79.8";
+          version = "0.80.2";
 
           src = pi-mono;
 
           # Hash covers all npm deps declared in the root package-lock.json.
           # Regenerate with:  nix build 2>&1 | awk '/got:/{print $2}'
-          npmDepsHash = "sha256-xrTpu4TkRmlflg7pMaw/QVsN+poQ41slVA5PET+NDoI=";
+          npmDepsHash = "sha256-CfqzLeYuEqmJoURGw3cDXTddEWA0isyKbtyilV8uHmg=";
 
           inherit nodejs;
 
@@ -130,69 +130,83 @@
         };
 
         # ── 2. Customizations from this repo (extensions, lib, skills, AGENTS.md) ──
-        piCustomizations = pkgs.runCommand "pi-customizations" {
-          nativeBuildInputs = [ nodejs pkgs.git ];
-        } ''
-          mkdir -p $out/extensions $out/lib $out/skills
+        piCustomizations =
+          pkgs.runCommand "pi-customizations"
+            {
+              nativeBuildInputs = [
+                nodejs
+                pkgs.git
+              ];
+            }
+            ''
+              mkdir -p $out/extensions $out/lib $out/skills
 
-          # Copy extensions + lib so ../lib/ imports work
-          cp -r ${./pi/extensions}/. $out/extensions/
-          cp -r ${./pi/lib}/. $out/lib/
+              # Copy extensions + lib so ../lib/ imports work
+              cp -r ${./pi/extensions}/. $out/extensions/
+              cp -r ${./pi/lib}/. $out/lib/
 
-          # Copy skills and AGENTS.md
-          cp -r ${./pi/skills}/. $out/skills/
-          cp ${./pi/AGENTS.md} $out/AGENTS.md
+              # Copy skills and AGENTS.md
+              cp -r ${./pi/skills}/. $out/skills/
+              cp ${./pi/AGENTS.md} $out/AGENTS.md
 
-          # Run tests on extensions
-          ${lib.concatMapStrings (testFile: ''
-            echo "Running test: ${testFile}"
-            ${nodejs}/bin/node $out/extensions/${testFile}
-          '') (map (f: lib.removePrefix (toString ./pi/extensions + "/") (toString f)) (
-            lib.filter (f: lib.hasSuffix ".test.ts" (baseNameOf (toString f))) (
-              lib.filesystem.listFilesRecursive ./pi/extensions
-            )
-          ))}
-        '';
+              # Run tests on extensions
+              ${lib.concatMapStrings
+                (testFile: ''
+                  echo "Running test: ${testFile}"
+                  ${nodejs}/bin/node $out/extensions/${testFile}
+                '')
+                (
+                  map (f: lib.removePrefix (toString ./pi/extensions + "/") (toString f)) (
+                    lib.filter (f: lib.hasSuffix ".test.ts" (baseNameOf (toString f))) (
+                      lib.filesystem.listFilesRecursive ./pi/extensions
+                    )
+                  )
+                )
+              }
+            '';
 
         # ── 3. Final Pi package (base + customizations) ───────────────────────
-        pi = pkgs.runCommand "pi-with-customizations" {
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          passthru = {
-            inherit piBase piCustomizations;
-          };
-          meta = piBase.meta // {
-            description = "Pi coding agent with custom extensions and configuration";
-          };
-        } ''
-          # Copy the base pi package
-          cp -r ${piBase} $out
-          chmod -R u+w $out
+        pi =
+          pkgs.runCommand "pi-with-customizations"
+            {
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              passthru = {
+                inherit piBase piCustomizations;
+              };
+              meta = piBase.meta // {
+                description = "Pi coding agent with custom extensions and configuration";
+              };
+            }
+            ''
+              # Copy the base pi package
+              cp -r ${piBase} $out
+              chmod -R u+w $out
 
-          # Add customizations to share/pi/
-          mkdir -p $out/share/pi
-          cp -r ${piCustomizations}/extensions $out/share/pi/extensions
-          cp -r ${piCustomizations}/lib $out/share/pi/lib
-          cp -r ${piCustomizations}/skills $out/share/pi/skills
-          cp ${piCustomizations}/AGENTS.md $out/share/pi/AGENTS.md
+              # Add customizations to share/pi/
+              mkdir -p $out/share/pi
+              cp -r ${piCustomizations}/extensions $out/share/pi/extensions
+              cp -r ${piCustomizations}/lib $out/share/pi/lib
+              cp -r ${piCustomizations}/skills $out/share/pi/skills
+              cp ${piCustomizations}/AGENTS.md $out/share/pi/AGENTS.md
 
-          # Build --extension / --skill flags for every bundled item.
-          # Skip test files (*.test.ts) - they're for build-time validation only.
-          extra_flags=""
-          for ext in $out/share/pi/extensions/*; do
-            case "$(basename "$ext")" in
-              *.test.ts) ;; # Skip test files
-              *) extra_flags="$extra_flags --extension $ext" ;;
-            esac
-          done
-          for skill in $out/share/pi/skills/*; do
-            extra_flags="$extra_flags --skill $skill"
-          done
+              # Build --extension / --skill flags for every bundled item.
+              # Skip test files (*.test.ts) - they're for build-time validation only.
+              extra_flags=""
+              for ext in $out/share/pi/extensions/*; do
+                case "$(basename "$ext")" in
+                  *.test.ts) ;; # Skip test files
+                  *) extra_flags="$extra_flags --extension $ext" ;;
+                esac
+              done
+              for skill in $out/share/pi/skills/*; do
+                extra_flags="$extra_flags --skill $skill"
+              done
 
-          # Replace the wrapper with one that includes customizations
-          rm $out/bin/pi
-          makeWrapper "${nodejs}/bin/node" "$out/bin/pi" \
-            --add-flags "$out/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js $extra_flags --append-system-prompt $out/share/pi/AGENTS.md"
-        '';
+              # Replace the wrapper with one that includes customizations
+              rm $out/bin/pi
+              makeWrapper "${nodejs}/bin/node" "$out/bin/pi" \
+                --add-flags "$out/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js $extra_flags --append-system-prompt $out/share/pi/AGENTS.md"
+            '';
       in
       {
         packages = {

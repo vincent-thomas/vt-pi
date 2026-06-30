@@ -18,6 +18,7 @@ import {
 } from "../../lib/git-utils.ts";
 import { isDefaultBranch, hasUpstreamBranch, branchExistsOnRemote } from "./logic.ts";
 import { runPreChecks, gitCommit } from "./logic.ts";
+import { execAsync } from "../../lib/exec-async.ts";
 
 export default function (pi: ExtensionAPI) {
 	// ── Tool: git_commit ──────────────────────────────────────────────────────
@@ -26,13 +27,18 @@ export default function (pi: ExtensionAPI) {
 		label: "Git Commit",
 		description:
 			"Commit the currently-staged changes with the provided message. " +
-			"Does NOT stage anything — run `git add` for the files you want first. " +
+			"Pass `add_all: true` to auto-stage all tracked file changes first. " +
 			"Runs pre-commit checks (static analysis only) before committing. " +
 			"Blocks commits on default branches (main/master). " +
 			"You MUST use this tool instead of running `git commit` in bash.",
 		parameters: Type.Object({
 			message: Type.String({
 				description: "Commit message. Be specific about what changed and why.",
+			}),
+			add_all: Type.Boolean({
+				description:
+					"Auto-stage all changes (`git add -A`) before committing. " +
+					"Set to true for quick checkpoints where you want everything changed to be included.",
 			}),
 		}),
 
@@ -106,8 +112,30 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// 4. Commit.
-			if (preCheck.steps.length > 0) {
+			// 4. Auto-stage if add_all is set.
+			if (params.add_all) {
+				completedSteps.push("📦 Staging all changes…");
+				onUpdate?.({
+					content: [{ type: "text", text: completedSteps.join("\n") }],
+				});
+
+				try {
+					await execAsync("git add -A", { cwd, timeout: 15_000, signal });
+				} catch (err: unknown) {
+					const output = err instanceof Error ? err.message : String(err);
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Staging failed:\n\`\`\`\n${output}\n\`\`\``,
+							},
+						],
+					};
+				}
+			}
+
+			// 5. Commit.
+			if (preCheck.steps.length > 0 || params.add_all) {
 				completedSteps.push("Committing…");
 				onUpdate?.({
 					content: [{ type: "text", text: completedSteps.join("\n") }],

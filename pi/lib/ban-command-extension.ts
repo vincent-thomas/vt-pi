@@ -8,53 +8,32 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { CommandPolicyStatus, type CommandPolicyEntry, type CommandUse } from "./command-policy-types.ts";
-import { commandInvocation, splitCommandSegments } from "./command-utils.ts";
+import { getCommandUses, matchesEntry, findBannedFlag, findDisallowedFlag } from "./ban-command-logic.ts";
 
 export { CommandPolicyStatus, type CommandPolicyEntry, type CommandUse } from "./command-policy-types.ts";
-
-function getCommandUses(text: string): CommandUse[] {
-	const uses: CommandUse[] = [];
-	for (const segment of splitCommandSegments(text)) {
-		const invocation = commandInvocation(segment);
-		if (!invocation) continue;
-		uses.push({ ...invocation, segment: segment.trim() });
-	}
-	return uses;
-}
-
-function matchesEntry(use: CommandUse, entry: CommandPolicyEntry): boolean {
-	const commandMatches =
-		typeof entry.command === "string" ? use.name === entry.command.toLowerCase() : entry.command(use.name);
-	if (!commandMatches) return false;
-	if (!entry.subcommand) return true;
-	return entry.subcommand.every((part, index) => use.args[index]?.toLowerCase() === part.toLowerCase());
-}
-
-function flagMatches(arg: string, flag: string): boolean {
-	return arg === flag || arg.startsWith(`${flag}=`);
-}
-
-function commandFlags(use: CommandUse): string[] {
-	return use.args.filter((arg) => arg.startsWith("-") && arg !== "--");
-}
-
-function findBannedFlag(use: CommandUse, entry: CommandPolicyEntry): string | null {
-	for (const flag of entry.bannedFlags ?? []) {
-		if (use.args.some((arg) => flagMatches(arg, flag))) return flag;
-	}
-	return null;
-}
-
-function findDisallowedFlag(use: CommandUse, entry: CommandPolicyEntry): string | null {
-	if (!entry.allowedFlags) return null;
-	for (const flag of commandFlags(use)) {
-		if (!entry.allowedFlags.some((allowed) => flagMatches(flag, allowed))) return flag;
-	}
-	return null;
-}
+export { matchesEntry, flagMatches, commandFlags, findBannedFlag, findDisallowedFlag, getCommandUses } from "./ban-command-logic.ts";
 
 export interface CommandPolicyOptions {
 	entries: CommandPolicyEntry[];
+}
+
+/** Check if raw shell text contains `<<` outside of quotes. */
+function hasHereDoc(text: string): boolean {
+	let quote: "'" | '"' | null = null;
+	let escape = false;
+	for (let i = 0; i < text.length - 1; i++) {
+		const ch = text[i];
+		const next = text[i + 1];
+		if (escape) { escape = false; continue; }
+		if (ch === "\\") { escape = true; continue; }
+		if (quote) { if (ch === quote) quote = null; continue; }
+		if (ch === "'" || ch === '"') { quote = ch; continue; }
+		// << or <<- outside quotes = here-doc
+		if (ch === "<" && (next === "<" || (next === "<" && i + 2 < text.length && text[i + 2] === "-"))) {
+			return true;
+		}
+	}
+	return false;
 }
 
 export function createCommandPolicyExtension(options: CommandPolicyOptions) {
@@ -63,6 +42,18 @@ export function createCommandPolicyExtension(options: CommandPolicyOptions) {
 			if (!isToolCallEventType("bash", event)) return;
 
 			const command = event.input.command ?? "";
+
+			// Block here-docs entirely — they're not relevant for command policy.
+			if (hasHereDoc(command)) {
+				if (ctx.hasUI) ctx.ui.notify("🚫 Blocked here-doc (<<).", "warning");
+				return {
+					block: true,
+					reason:
+						`Here-docs (<<) are not allowed. ` +
+						`Use inline input or other methods instead. ` +
+						`Blocked: \`${command.trim()}\``,
+				};
+			}
 			for (const use of getCommandUses(command)) {
 				const entry = options.entries.find((candidate) => matchesEntry(use, candidate));
 				if (!entry) {

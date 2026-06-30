@@ -10,17 +10,24 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { currentBranch } from "../../lib/git-utils.ts";
 import {
-	runPreChecks,
 	gitPush,
 	getHeadSha,
 	hasUnpushedCommits,
+	hasDirtyWorkingTree,
 	pollChecks,
 	fetchFailureLogs,
 	isFailure,
 	findGitPushInText,
 	findGitPushInScript,
 	extractScriptPaths,
+	getPrMergeableStatus,
+	getPrBaseBranch,
+	mergeBaseBranchIntoCurrent,
+	detectPrConflictsLocally,
+	needsPullBeforePush,
+	pullRemoteChanges,
 	type CheckResult,
 	type FailureLog,
 } from "./logic.ts";
@@ -35,8 +42,7 @@ export default function (pi: ExtensionAPI) {
 		name: "push_and_check_ci",
 		label: "Push & Check CI",
 		description:
-			"Run local pre-push checks (static analysis), push the " +
-			"current branch to origin, then poll GitHub Actions checks until they " +
+			"Push the current branch to origin and poll GitHub Actions checks until they " +
 			"all finish. Returns the status of every check. For failures, includes " +
 			"the last 200 lines of log output. " +
 			"You MUST use this tool instead of running `git push` in bash. " +
@@ -46,7 +52,160 @@ export default function (pi: ExtensionAPI) {
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const cwd = ctx.cwd;
 
-			// 0. Check if there's something to push.
+			// ── 0. Reject if working tree is dirty ─────────────────────────
+			onUpdate?.({
+				content: [{ type: "text", text: "Checking for uncommitted changes…" }],
+			});
+
+			if (await hasDirtyWorkingTree(cwd, signal)) {
+				return {
+					content: [
+						{
+							type: "text",
+							text:
+								`## ⚠️ Working Tree Has Uncommitted Changes\n\n` +
+								`The working tree is dirty — there are unstaged, uncommitted changes.\n\n` +
+								`Commit them first before pushing. A push should represent a clear, ` +
+								`verifiable checkpoint.\n\n` +
+								`Run \`git status\` to see what's pending, then stage and commit. ` +
+								`After committing, call \`push_and_check_ci\` again.`,
+						},
+					],
+					details: { dirtyWorkingTree: true },
+				};
+			}
+
+			// ── 1. Check for PR merge conflicts ────────────────────────────
+			// If the PR has conflicts against its base branch, we try to merge
+			// the latest base branch into the PR branch before pushing.
+			const mergeableStatus = await getPrMergeableStatus(cwd, signal);
+
+			let baseBranch: string | null = null;
+			let branchName = currentBranch(cwd);
+			let hasConflicts = mergeableStatus === "CONFLICTING";
+
+			if (mergeableStatus === "CONFLICTING") {
+				baseBranch = await getPrBaseBranch(cwd, signal);
+			} else if (mergeableStatus !== "MERGEABLE") {
+				// GitHub returned null (no PR, still computing, or unavailable).
+				// Try local git-based conflict detection as a fallback.
+				onUpdate?.({
+					content: [{ type: "text", text: "GitHub merge status unknown — checking locally…" }],
+				});
+
+				const localCheck = await detectPrConflictsLocally(cwd, signal);
+				if (localCheck.hasConflicts) {
+					hasConflicts = true;
+					baseBranch = localCheck.baseBranch;
+					onUpdate?.({
+						content: [
+							{
+								type: "text",
+								text: `Local git check found conflicts with \`${baseBranch}\`.`,
+							},
+						],
+					});
+				}
+			}
+
+			if (hasConflicts) {
+				baseBranch = baseBranch ?? (await getPrBaseBranch(cwd, signal));
+
+				if (!baseBranch || !branchName) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`Could not determine the PR's base branch or current branch. ` +
+									`Fix conflicts manually and try again.`,
+							},
+						],
+						details: {
+							mergeConflict: true,
+							error: "Unable to determine PR base branch or current branch",
+						},
+					};
+				}
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text: "PR has merge conflicts. Attempting to merge the latest base branch…",
+							},
+						],
+					},
+				);
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text: `Merging ${baseBranch} into ${branchName} via worktree…`,
+							},
+						],
+					},
+				);
+
+				const mergeResult = await mergeBaseBranchIntoCurrent(
+					cwd,
+					baseBranch,
+					branchName,
+					signal,
+				);
+
+				if (!mergeResult.success) {
+					const conflictList =
+						mergeResult.conflictPaths.length > 0
+							? mergeResult.conflictPaths.map((p) => `- \`${p}\``).join("\n")
+							: "Check the merge output below for conflicting files.";
+
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`## ⚠️ Merge Conflicts Detected\n\n` +
+									`The PR branch \`${branchName}\` has conflicts with the base branch ` +
+									`\`${baseBranch}\`. I attempted to merge the latest \`${baseBranch}\` into ` +
+									`\`${branchName}\` but there are unresolved conflicts.\n\n` +
+									`### Conflicting files:\n${conflictList}\n\n` +
+									`### Merge output:\n\`\`\`\n${mergeResult.output.trim()}\n\`\`\`\n\n` +
+									`### To resolve:\n` +
+									`1. Resolve the conflicts in the listed files\n` +
+									`2. \`git add\` the resolved files\n` +
+									`3. Commit the merge (the merge message is pre-filled)\n` +
+									`4. Run \`push_and_check_ci\` again`,
+							},
+						],
+						details: {
+							mergeConflict: true,
+							baseBranch,
+							currentBranch: branchName,
+							conflictPaths: mergeResult.conflictPaths,
+							mergeOutput: mergeResult.output,
+						},
+					};
+				}
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text:
+									`Successfully merged \`${baseBranch}\` into \`${branchName}\` ` +
+									`without conflicts. Proceeding with push…`,
+							},
+						],
+					},
+				);
+			}
+
+			// 1. Check if there's something to push.
 			const hasSomethingToPush = await hasUnpushedCommits(cwd, signal);
 
 			let pushedSha: string | undefined;
@@ -55,50 +214,77 @@ export default function (pi: ExtensionAPI) {
 				cycleCount++;
 				const cycle = cycleCount;
 
-				// 1. Pre-push checks (static analysis)
-				const completedSteps: string[] = [];
+				// ── Pull remote changes if local and remote have diverged ────────
 				onUpdate?.({
-					content: [{ type: "text", text: "Running pre-push checks…" }],
+					content: [
+						{ type: "text", text: "Checking if remote has newer commits…" },
+					],
 				});
 
-				const preCheck = await runPreChecks(cwd, signal, (step) => {
-					const icon = step.passed ? "✅" : "❌";
-					const time = step.elapsed ? ` (${step.elapsed}s)` : "";
-					completedSteps.push(`${icon} ${step.command}${time}`);
-					onUpdate?.({
-						content: [{ type: "text", text: completedSteps.join("\n") }],
-					});
-				});
+				const needsPull = await needsPullBeforePush(cwd, signal);
 
-				if (!preCheck.passed) {
-					cycleCount--;
-					const failedStep = preCheck.steps.find((s) => !s.passed)!;
-					const passedSteps = preCheck.steps
-						.filter((s) => s.passed)
-						.map((s) => `✅ ${s.command}`)
-						.join("\n");
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									`Pre-push check failed. Fix the errors before pushing.\n\n` +
-									(passedSteps ? `${passedSteps}\n` : "") +
-									`❌ \`${failedStep.command}\`:\n\`\`\`\n${failedStep.output}\n\`\`\``,
+				if (needsPull) {
+					onUpdate?.(
+						{
+							content: [
+								{
+									type: "text",
+									text:
+										`Remote and local have diverged — pulling via merge` +
+										`pulling changes via merge (non-history-rewriting)…`,
+								},
+							],
+						},
+					);
+
+					const pullResult = await pullRemoteChanges(cwd, signal);
+
+					if (!pullResult.success) {
+						const conflictList =
+							pullResult.conflictPaths.length > 0
+								? pullResult.conflictPaths.map((p) => `- \`${p}\``).join("\n")
+								: "Check the pull output below for conflicting files.";
+
+						cycleCount = 0;
+						return {
+							content: [
+								{
+									type: "text",
+									text:
+										`## ⚠️ Merge Conflicts During Pull\n\n` +
+										`The remote branch has commits ahead of local. ` +
+										`I attempted to pull them via merge but there are unresolved ` +
+										`conflicts.\n\n` +
+										`### Conflicting files:\n${conflictList}\n\n` +
+										`### Pull output:\n\`\`\`\n${pullResult.output.trim()}\n\`\`\`\n\n` +
+										`### To resolve:\n` +
+										`1. Resolve the conflicts in the listed files\n` +
+										`2. \`git add\` the resolved files\n` +
+										`3. Commit the merge\n` +
+										`4. Run \`push_and_check_ci\` again`,
+								},
+							],
+							details: {
+								mergeConflict: true,
+								conflictPaths: pullResult.conflictPaths,
+								pullOutput: pullResult.output,
 							},
-						],
-						details: { preCheckFailed: true, steps: preCheck.steps },
-					};
+						};
+					}
+
+					onUpdate?.(
+						{
+							content: [
+								{
+									type: "text",
+									text: "Pull succeeded. Proceeding with push…",
+								},
+							],
+						},
+					);
 				}
 
-				if (preCheck.steps.length > 0) {
-					completedSteps.push("Pushing to origin…");
-					onUpdate?.({
-						content: [{ type: "text", text: completedSteps.join("\n") }],
-					});
-				}
-
-				// 2. Push
+				// Push
 				onUpdate?.({
 					content: [{ type: "text", text: "Pushing to origin…" }],
 				});

@@ -49,6 +49,8 @@ export function splitCommandSegments(text: string): string[] {
 	let quote: "'" | '"' | null = null;
 	let escape = false;
 	let skipRedirectionTarget = false;
+	// Nesting depth of $(...) and <(...) — when > 0, ) should not split.
+	let substStack: string[] = [];
 
 	function pushCurrent() {
 		segments.push(current);
@@ -100,6 +102,16 @@ export function splitCommandSegments(text: string): string[] {
 			continue;
 		}
 
+		if (ch === ")" && substStack.length > 0) {
+			const subType = substStack.pop()!;
+			if (subType === "$") {
+				// Command substitution $(...) — extract the content as a segment.
+				pushCurrent();
+			}
+			// For process substitution <(...), the content is an argument — don't push.
+			continue;
+		}
+
 		if ((ch === "&" && next === "&") || (ch === "|" && next === "|")) {
 			pushCurrent();
 			i++;
@@ -108,6 +120,15 @@ export function splitCommandSegments(text: string): string[] {
 
 		if (ch === "$" && next === "(") {
 			pushCurrent();
+			substStack.push("$");
+			i++;
+			continue;
+		}
+
+		if (ch === "<" && next === "(") {
+			// Process substitution <(...) — not a redirect, treat as part of segment.
+			current += "<(";
+			substStack.push("<");
 			i++;
 			continue;
 		}
@@ -130,6 +151,8 @@ export function splitCommandSegments(text: string): string[] {
 		current += ch;
 	}
 
+	// If we ended while in a here-doc, the current buffer might be the closing
+	// delimiter without a trailing newline. Discard it so it doesn't leak.
 	segments.push(current);
 	return segments;
 }

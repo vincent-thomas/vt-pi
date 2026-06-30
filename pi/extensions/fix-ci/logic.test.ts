@@ -13,10 +13,12 @@ import {
 	mapCheckRun,
 	mapStatusState,
 	allSuitesComplete,
-	detectProjects,
 	hasUnpushedCommits,
 	gitPush,
 } from "./logic.ts";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Tiny test harness
@@ -285,78 +287,6 @@ suite("extractScriptPaths", () => {
 		assert.deepEqual(extractScriptPaths("bash a.sh && bash b.sh"), ["a.sh", "b.sh"]));
 });
 
-// ---------------------------------------------------------------------------
-// detectProject
-// ---------------------------------------------------------------------------
-
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-
-suite("detectProjects", () => {
-	function withTempDir(files: string[], fn: (dir: string) => void) {
-		const dir = mkdtempSync(join(tmpdir(), "fix-ci-test-"));
-		try {
-			for (const f of files) writeFileSync(join(dir, f), "");
-			fn(dir);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	}
-
-	test("Cargo.toml → rust", () =>
-		withTempDir(["Cargo.toml"], (dir) => {
-			const projects = detectProjects(dir);
-			assert.equal(projects.length, 1);
-			assert.equal(projects[0].name, "rust");
-			assert.deepEqual(projects[0].checks, ["cargo check"]);
-		}));
-
-	test("package.json → node", () =>
-		withTempDir(["package.json"], (dir) => {
-			const projects = detectProjects(dir);
-			assert.equal(projects.length, 1);
-			assert.equal(projects[0].name, "node");
-		}));
-
-	test("go.mod → go", () =>
-		withTempDir(["go.mod"], (dir) => {
-			const projects = detectProjects(dir);
-			assert.equal(projects.length, 1);
-			assert.equal(projects[0].name, "go");
-		}));
-
-	test("pyproject.toml → python", () =>
-		withTempDir(["pyproject.toml"], (dir) => {
-			const projects = detectProjects(dir);
-			assert.equal(projects.length, 1);
-			assert.equal(projects[0].name, "python");
-		}));
-
-	test("empty dir → empty", () =>
-		withTempDir([], (dir) => {
-			assert.deepEqual(detectProjects(dir), []);
-		}));
-
-	test("Cargo.toml + package.json → both rust and node", () =>
-		withTempDir(["Cargo.toml", "package.json"], (dir) => {
-			const projects = detectProjects(dir);
-			assert.equal(projects.length, 2);
-			assert.equal(projects[0].name, "rust");
-			assert.equal(projects[1].name, "node");
-		}));
-
-	test("all markers → all project types", () =>
-		withTempDir(["Cargo.toml", "package.json", "go.mod", "pyproject.toml"], (dir) => {
-			const projects = detectProjects(dir);
-			assert.equal(projects.length, 4);
-			const names = projects.map((p) => p.name);
-			assert.ok(names.includes("rust"));
-			assert.ok(names.includes("node"));
-			assert.ok(names.includes("go"));
-			assert.ok(names.includes("python"));
-		}));
-});
 
 // ---------------------------------------------------------------------------
 // hasUnpushedCommits
