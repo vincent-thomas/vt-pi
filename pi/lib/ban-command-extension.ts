@@ -27,7 +27,10 @@ function matchesEntry(use: CommandUse, entry: CommandPolicyEntry): boolean {
 		typeof entry.command === "string" ? use.name === entry.command.toLowerCase() : entry.command(use.name);
 	if (!commandMatches) return false;
 	if (!entry.subcommand) return true;
-	return entry.subcommand.every((part, index) => use.args[index]?.toLowerCase() === part.toLowerCase());
+	// subcommand is a list of arrays — ANY matching sub-array is sufficient (OR semantics).
+	return entry.subcommand.some((sub) =>
+		sub.every((part, index) => use.args[index]?.toLowerCase() === part.toLowerCase()),
+	);
 }
 
 function flagMatches(arg: string, flag: string): boolean {

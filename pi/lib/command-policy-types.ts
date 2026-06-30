@@ -16,8 +16,10 @@ type CommandPolicyEntryBase = {
 	name: string;
 	/** Executable basename or predicate to match, e.g. "git", "rg", or python variants */
 	command: string | ((command: string) => boolean);
-	/** Optional required leading args/subcommand, e.g. ["status"] for `git status` */
-	subcommand?: string[];
+	/** Optional required leading args/subcommand, e.g. [["status"]] for `git status`.
+ * Each sub-array is checked independently; if ANY matches, the entry matches.
+ * So [["status"], ["diff"]] matches both `git status` and `git diff`. */
+	subcommand?: (string[])[];
 	/** Guidance included when this entry blocks a command */
 	description?: string;
 };

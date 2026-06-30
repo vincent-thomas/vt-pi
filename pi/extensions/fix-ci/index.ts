@@ -25,6 +25,8 @@ import {
 	getPrBaseBranch,
 	mergeBaseBranchIntoCurrent,
 	detectPrConflictsLocally,
+	needsPullBeforePush,
+	pullRemoteChanges,
 	type CheckResult,
 	type FailureLog,
 } from "./logic.ts";
@@ -188,23 +190,23 @@ export default function (pi: ExtensionAPI) {
 				cycleCount++;
 				const cycle = cycleCount;
 
-				// ── Pull remote changes if remote is ahead ───────────────────
+				// ── Pull remote changes if local and remote have diverged ────────
 				onUpdate?.({
 					content: [
 						{ type: "text", text: "Checking if remote has newer commits…" },
 					],
 				});
 
-				const remoteAhead = await isRemoteAhead(cwd, signal);
+				const needsPull = await needsPullBeforePush(cwd, signal);
 
-				if (remoteAhead) {
+				if (needsPull) {
 					onUpdate?.(
 						{
 							content: [
 								{
 									type: "text",
 									text:
-										`Remote branch has commits ahead of local — ` +
+										`Remote and local have diverged — pulling via merge` +
 										`pulling changes via merge (non-history-rewriting)…`,
 								},
 							],

@@ -766,10 +766,17 @@ export async function detectPrConflictsLocally(
 // ---------------------------------------------------------------------------
 
 /**
- * Check if the remote tracking branch has commits ahead of the local branch.
+ * Check if the remote tracking branch can't be fast-forwarded into the local
+ * branch — meaning we need to pull remote changes before pushing.
+ *
+ * Uses `git merge-base --is-ancestor` which correctly handles both "remote is
+ * ahead" and "histories diverged" (e.g. after a rebase). Returns true when a
+ * plain push would fail (remote has commits local doesn't, or histories have
+ * diverged entirely).
+ *
  * Fetches first to ensure refs are up to date.
  */
-export async function isRemoteAhead(
+export async function needsPullBeforePush(
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<boolean> {
@@ -784,12 +791,19 @@ export async function isRemoteAhead(
 			signal,
 		});
 
-		const { stdout } = await execAsync(
-			`git rev-list --count HEAD..origin/${branch} 2>/dev/null`,
-			{ cwd, timeout: 10_000, signal },
-		);
-		const count = parseInt(stdout.trim(), 10);
-		return !isNaN(count) && count > 0;
+		// origin/<branch> is an ancestor of HEAD → can fast-forward push → no pull needed
+		// If NOT an ancestor, remote is ahead or histories diverged → pull needed
+		try {
+			await execAsync(
+				`git merge-base --is-ancestor origin/${branch} HEAD 2>/dev/null`,
+				{ cwd, timeout: 10_000, signal },
+			);
+			// exit 0 = is ancestor = remote is behind or equal → no pull needed
+			return false;
+		} catch {
+			// non-zero = not an ancestor → pull needed
+			return true;
+		}
 	} catch {
 		return false;
 	}
