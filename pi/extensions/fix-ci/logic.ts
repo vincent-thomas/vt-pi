@@ -8,7 +8,7 @@
  * kills child processes promptly.
  */
 import { execAsync, extractErrorOutput } from "../../lib/exec-async.ts";
-import { hasUpstream } from "../../lib/git-utils.ts";
+import { hasUpstream, currentBranch } from "../../lib/git-utils.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -639,6 +639,126 @@ export function extractConflictPaths(output: string): string[] {
 		}
 	}
 	return paths;
+}
+
+// ---------------------------------------------------------------------------
+// Local conflict detection (fallback when gh API is unavailable)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect merge conflicts locally using git merge-tree.
+ * Does NOT modify the working tree — purely read-only.
+ *
+ * Returns { hasConflicts, conflictPaths, baseBranch } where baseBranch
+ * is the detected PR base branch (e.g. "main"), or null if no PR branch
+ * could be determined.
+ */
+export async function detectPrConflictsLocally(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<{ hasConflicts: boolean; conflictPaths: string[]; baseBranch: string | null }> {
+	// Determine the PR base branch. Try gh first, fall back to git config.
+	let baseBranch: string | null = null;
+
+	try {
+		const { stdout } = await execAsync(
+			"gh pr view --json baseRefName --jq '.baseRefName' 2>/dev/null",
+			{ cwd, timeout: 10_000, signal },
+		);
+		baseBranch = stdout.trim() || null;
+	} catch {
+		// gh not available or no PR — fall through
+	}
+
+	if (!baseBranch) {
+		// Try to guess the base branch from the remote HEAD or default branch
+		try {
+			const { stdout } = await execAsync(
+				"git rev-parse --abbrev-ref origin/HEAD 2>/dev/null",
+				{ cwd, timeout: 5_000, signal },
+			);
+			const ref = stdout.trim().replace("origin/", "");
+			if (ref) baseBranch = ref;
+		} catch {
+			// Ignore
+		}
+	}
+
+	if (!baseBranch) {
+		// Last resort — try "main" then "master"
+		for (const candidate of ["main", "master"]) {
+			try {
+				await execAsync(
+					`git rev-parse --verify origin/${candidate} 2>/dev/null`,
+					{ cwd, timeout: 5_000, signal },
+				);
+				baseBranch = candidate;
+				break;
+			} catch {
+				// Not found
+			}
+		}
+	}
+
+	if (!baseBranch) {
+		return { hasConflicts: false, conflictPaths: [], baseBranch: null };
+	}
+
+	// Fetch the latest base branch from origin
+	try {
+		await execAsync(`git fetch origin ${baseBranch} 2>&1`, {
+			cwd,
+			timeout: 30_000,
+			signal,
+		});
+	} catch {
+		// If fetch fails, try with just `git fetch`
+		try {
+			await execAsync("git fetch origin 2>&1", {
+				cwd,
+				timeout: 30_000,
+				signal,
+			});
+		} catch {
+			return { hasConflicts: false, conflictPaths: [], baseBranch };
+		}
+	}
+
+	// Use git merge-tree to detect conflicts (purely read-only, no worktree needed)
+	try {
+		const mergeBaseCmd = `git merge-base HEAD origin/${baseBranch}`;
+		const mergeTreeCmd = `git merge-tree $(git merge-base HEAD origin/${baseBranch}) HEAD origin/${baseBranch}`;
+
+		const mergeBaseResult = await execAsync(mergeBaseCmd, {
+			cwd,
+			timeout: 10_000,
+			signal,
+		});
+		const mergeBase = mergeBaseResult.stdout.trim();
+
+		if (!mergeBase) {
+			return { hasConflicts: false, conflictPaths: [], baseBranch };
+		}
+
+		const mergeTreeResult = await execAsync(mergeTreeCmd, {
+			cwd,
+			timeout: 15_000,
+			signal,
+		});
+
+		// git merge-tree outputs "CONFLICT ..." lines when there are conflicts.
+		// If exit code is 0, there are no conflicts. Non-zero with "CONFLICT" means conflicts.
+		const output = mergeTreeResult.stdout + mergeTreeResult.stderr;
+		const conflictPaths = extractConflictPaths(output);
+
+		return {
+			hasConflicts: conflictPaths.length > 0,
+			conflictPaths,
+			baseBranch,
+		};
+	} catch {
+		return { hasConflicts: false, conflictPaths: [], baseBranch };
+	}
 }
 
 // ---------------------------------------------------------------------------

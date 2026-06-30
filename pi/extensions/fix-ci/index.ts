@@ -24,6 +24,7 @@ import {
 	getPrMergeableStatus,
 	getPrBaseBranch,
 	mergeBaseBranchIntoCurrent,
+	detectPrConflictsLocally,
 	type CheckResult,
 	type FailureLog,
 } from "./logic.ts";
@@ -53,18 +54,130 @@ export default function (pi: ExtensionAPI) {
 			// the latest base branch into the PR branch before pushing.
 			const mergeableStatus = await getPrMergeableStatus(cwd, signal);
 
+			let baseBranch: string | null = null;
+			let branchName = currentBranch(cwd);
+			let hasConflicts = mergeableStatus === "CONFLICTING";
+
 			if (mergeableStatus === "CONFLICTING") {
+				baseBranch = await getPrBaseBranch(cwd, signal);
+			} else if (mergeableStatus !== "MERGEABLE") {
+				// GitHub returned null (no PR, still computing, or unavailable).
+				// Try local git-based conflict detection as a fallback.
 				onUpdate?.({
-					content: [
-						{
-							type: "text",
-							text: "PR has merge conflicts. Attempting to merge the latest base branch…",
-						},
-					],
+					content: [{ type: "text", text: "GitHub merge status unknown — checking locally…" }],
 				});
 
-				const baseBranch = await getPrBaseBranch(cwd, signal);
-				const branchName = currentBranch(cwd);
+				const localCheck = await detectPrConflictsLocally(cwd, signal);
+				if (localCheck.hasConflicts) {
+					hasConflicts = true;
+					baseBranch = localCheck.baseBranch;
+					onUpdate?.({
+						content: [
+							{
+								type: "text",
+								text: `Local git check found conflicts with \`${baseBranch}\`.`,
+							},
+						],
+					});
+				}
+			}
+
+			if (hasConflicts) {
+				baseBranch = baseBranch ?? (await getPrBaseBranch(cwd, signal));
+
+				if (!baseBranch || !branchName) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`Could not determine the PR's base branch or current branch. ` +
+									`Fix conflicts manually and try again.`,
+							},
+						],
+						details: {
+							mergeConflict: true,
+							error: "Unable to determine PR base branch or current branch",
+						},
+					};
+				}
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text: "PR has merge conflicts. Attempting to merge the latest base branch…",
+							},
+						],
+					},
+				);
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text: `Merging ${baseBranch} into ${branchName} via worktree…`,
+							},
+						],
+					},
+				);
+
+				const mergeResult = await mergeBaseBranchIntoCurrent(
+					cwd,
+					baseBranch,
+					branchName,
+					signal,
+				);
+
+				if (!mergeResult.success) {
+					const conflictList =
+						mergeResult.conflictPaths.length > 0
+							? mergeResult.conflictPaths.map((p) => `- \`${p}\``).join("\n")
+							: "Check the merge output below for conflicting files.";
+
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`## ⚠️ Merge Conflicts Detected\n\n` +
+									`The PR branch \`${branchName}\` has conflicts with the base branch ` +
+									`\`${baseBranch}\`. I attempted to merge the latest \`${baseBranch}\` into ` +
+									`\`${branchName}\` but there are unresolved conflicts.\n\n` +
+									`### Conflicting files:\n${conflictList}\n\n` +
+									`### Merge output:\n\`\`\`\n${mergeResult.output.trim()}\n\`\`\`\n\n` +
+									`### To resolve:\n` +
+									`1. Resolve the conflicts in the listed files\n` +
+									`2. \`git add\` the resolved files\n` +
+									`3. Commit the merge (the merge message is pre-filled)\n` +
+									`4. Run \`push_and_check_ci\` again`,
+							},
+						],
+						details: {
+							mergeConflict: true,
+							baseBranch,
+							currentBranch: branchName,
+							conflictPaths: mergeResult.conflictPaths,
+							mergeOutput: mergeResult.output,
+						},
+					};
+				}
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text:
+									`Successfully merged \`${baseBranch}\` into \`${branchName}\` ` +
+									`without conflicts. Proceeding with push…`,
+							},
+						],
+					},
+				);
+			}
 
 				if (!baseBranch || !branchName) {
 					return {
