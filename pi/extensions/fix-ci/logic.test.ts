@@ -13,10 +13,10 @@ import {
 	mapCheckRun,
 	mapStatusState,
 	allSuitesComplete,
-	detectProjects,
 	hasUnpushedCommits,
 	gitPush,
 } from "./logic.ts";
+import { detectProjects } from "../../lib/precheck.ts";
 
 // ---------------------------------------------------------------------------
 // Tiny test harness

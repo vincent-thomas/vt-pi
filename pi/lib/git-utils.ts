@@ -6,6 +6,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { execAsync } from "./exec-async.ts";
 import { commandInvocation, splitCommandSegments } from "./command-utils.ts";
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,35 @@ export function findGitCommitInText(text: string): string | null {
 
 export function findGitCommitInScript(scriptPath: string, cwd: string): string | null {
 	return findGitCommandInScript(scriptPath, cwd, isGitCommitLine);
+}
+
+// ---------------------------------------------------------------------------
+// Branch metadata
+// ---------------------------------------------------------------------------
+
+const DEFAULT_BRANCHES = new Set(["main", "master"]);
+
+/** Returns true if `branch` is a default branch (main/master). */
+export function isDefaultBranch(branch: string): boolean {
+	return DEFAULT_BRANCHES.has(branch);
+}
+
+/**
+ * Returns true if the current branch has an upstream tracking branch set.
+ * Async — uses execAsync under the hood.
+ */
+export async function hasUpstream(cwd: string, signal?: AbortSignal): Promise<boolean> {
+	try {
+		await execAsync("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
+			cwd,
+			timeout: 5_000,
+			signal,
+		});
+		return true;
+	} catch {
+		// Non-zero exit means no upstream is configured for this branch.
+		return false;
+	}
 }
 
 // ---------------------------------------------------------------------------
