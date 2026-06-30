@@ -148,9 +148,12 @@ test("allows commands by exact command", () => {
 });
 
 test("allows git on a subcommand basis", () => {
+	assert.deepEqual(findEntry("git")?.subcommand, [
+		["diff"], ["log"], ["show"], ["branch"],
+		["ls-files"], ["add"], ["restore"],
+		["rev-parse"], ["merge-base"], ["commit"],
+	]);
 	assert.deepEqual(findEntry("git status")?.subcommand, [["status"]]);
-	assert.deepEqual(findEntry("git diff")?.subcommand, [["diff"]]);
-	assert.deepEqual(findEntry("git commit")?.subcommand, [["commit"]]);
 });
 
 test("can explicitly ban entries with model guidance", () => {
