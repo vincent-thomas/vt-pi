@@ -7,54 +7,8 @@
  * (which freezes the TUI). The abort signal is threaded through so Ctrl+C
  * kills child processes promptly.
  */
-import { exec, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-
-// ---------------------------------------------------------------------------
-// Async exec with abort support
-// ---------------------------------------------------------------------------
-
-interface ExecResult {
-	stdout: string;
-	stderr: string;
-}
-
-/**
- * Async exec that kills the child process when the signal fires.
- * Rejects on non-zero exit or timeout.
- */
-function execAsync(
-	command: string,
-	options: { cwd?: string; timeout?: number; signal?: AbortSignal },
-): Promise<ExecResult> {
-	return new Promise((resolve, reject) => {
-		const child: ChildProcess = exec(
-			command,
-			{ cwd: options.cwd, timeout: options.timeout },
-			(err, stdout, stderr) => {
-				cleanup();
-				if (err) {
-					// Attach stdout/stderr to the error for callers that need them.
-					(err as any).stdout = stdout;
-					(err as any).stderr = stderr;
-					reject(err);
-				} else {
-					resolve({ stdout: String(stdout), stderr: String(stderr) });
-				}
-			},
-		);
-
-		const onAbort = () => {
-			child.kill();
-		};
-		options.signal?.addEventListener("abort", onAbort, { once: true });
-
-		const cleanup = () => {
-			options.signal?.removeEventListener("abort", onAbort);
-		};
-	});
-}
+import { execAsync, extractErrorOutput } from "../../lib/exec-async.ts";
+import { hasUpstream } from "../../lib/git-utils.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,125 +44,9 @@ export interface PushResult {
 	output: string;
 }
 
-export interface PreCheckResult {
-	passed: boolean;
-	steps: { command: string; passed: boolean; output: string }[];
-}
-
-// ---------------------------------------------------------------------------
-// Project type detection & pre-push checks
-// ---------------------------------------------------------------------------
-
-interface ProjectType {
-	name: string;
-	checks: string[];
-}
-
-const PROJECT_TYPES: {
-	markers: string[];
-	project: ProjectType;
-}[] = [
-	{
-		markers: ["Cargo.toml"],
-		project: {
-			name: "rust",
-			checks: ["cargo check"],
-		},
-	},
-	{
-		markers: ["package.json"],
-		project: {
-			name: "node",
-			checks: ["npx tsc --noEmit"],
-		},
-	},
-	{
-		markers: ["go.mod"],
-		project: {
-			name: "go",
-			checks: ["go vet ./..."],
-		},
-	},
-	{
-		markers: ["pyproject.toml", "setup.py", "setup.cfg"],
-		project: {
-			name: "python",
-			checks: [
-				"python -m py_compile $(git diff --name-only --cached -- '*.py' | head -50 || true)",
-			],
-		},
-	},
-];
-
-export function detectProjects(cwd: string): ProjectType[] {
-	const found: ProjectType[] = [];
-	for (const { markers, project } of PROJECT_TYPES) {
-		for (const marker of markers) {
-			if (existsSync(resolve(cwd, marker))) {
-				found.push(project);
-				break;
-			}
-		}
-	}
-	return found;
-}
-
-export async function runPreChecks(
-	cwd: string,
-	signal?: AbortSignal,
-	onStep?: (step: PreCheckResult["steps"][0]) => void,
-): Promise<PreCheckResult> {
-	const projects = detectProjects(cwd);
-	if (projects.length === 0) return { passed: true, steps: [] };
-
-	const steps: PreCheckResult["steps"] = [];
-
-	for (const project of projects) {
-		for (const command of project.checks) {
-			if (signal?.aborted) return { passed: false, steps };
-			const start = Date.now();
-			try {
-				const { stdout, stderr } = await execAsync(command, {
-					cwd,
-					timeout: 120_000,
-					signal,
-				});
-				const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-				const step = { command, passed: true, output: stdout + stderr, elapsed };
-				steps.push(step);
-				onStep?.(step);
-			} catch (err: unknown) {
-				const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-				const output = extractErrorOutput(err);
-				const step = { command, passed: false, output, elapsed };
-				steps.push(step);
-				onStep?.(step);
-				return { passed: false, steps };
-			}
-		}
-	}
-
-	return { passed: true, steps };
-}
-
 // ---------------------------------------------------------------------------
 // Git push
 // ---------------------------------------------------------------------------
-
-/** Returns true if the current branch has an upstream tracking branch set. */
-async function hasUpstream(cwd: string, signal?: AbortSignal): Promise<boolean> {
-	try {
-		await execAsync("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
-			cwd,
-			timeout: 5_000,
-			signal,
-		});
-		return true;
-	} catch {
-		// Non-zero exit means no upstream is configured for this branch.
-		return false;
-	}
-}
 
 export async function gitPush(cwd: string, signal?: AbortSignal): Promise<PushResult> {
 	// A brand-new branch has no upstream, so a bare `git push` fails. In that
@@ -628,16 +466,184 @@ export {
 } from "../../lib/git-utils.ts";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// PR conflict detection & resolution
 // ---------------------------------------------------------------------------
 
-function extractErrorOutput(err: unknown): string {
-	if (err && typeof err === "object") {
-		if ("stderr" in err && (err as any).stderr) return String((err as any).stderr);
-		if ("stdout" in err && (err as any).stdout) return String((err as any).stdout);
+/**
+ * Get the base branch name of the current PR (e.g. "main").
+ * Returns null if there's no PR or the query fails.
+ */
+export async function getPrBaseBranch(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	try {
+		const { stdout } = await execAsync(
+			"gh pr view --json baseRefName --jq '.baseRefName' 2>/dev/null",
+			{ cwd, timeout: 15_000, signal },
+		);
+		return stdout.trim() || null;
+	} catch {
+		return null;
 	}
-	return String(err);
 }
+
+/**
+ * Get the mergeable status of the current PR.
+ * Returns "MERGEABLE", "CONFLICTING", "UNKNOWN", or null (no PR / error).
+ */
+export async function getPrMergeableStatus(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	try {
+		const { stdout } = await execAsync(
+			"gh pr view --json mergeable --jq '.mergeable' 2>/dev/null",
+			{ cwd, timeout: 15_000, signal },
+		);
+		return stdout.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Get the latest commit SHA of a branch via the GitHub API.
+ * Returns null on failure.
+ */
+export async function getBranchShaViaApi(
+	cwd: string,
+	branch: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	try {
+		const { stdout } = await execAsync(
+			`gh api "repos/{owner}/{repo}/git/ref/heads/${branch}" --jq '.object.sha' 2>/dev/null`,
+			{ cwd, timeout: 15_000, signal },
+		);
+		return stdout.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Merge the latest version of the base branch into the current PR branch.
+ *
+ * 1. Creates a worktree with the base branch checked out at its latest SHA
+ * 2. Verifies the worktree SHA matches what the GitHub API reports
+ * 3. Merges the base branch into the current branch (creates a merge commit
+ *    if no conflicts, stops with conflicts if there are any)
+ *
+ * Returns { success, output, conflictPaths }.
+ */
+export async function mergeBaseBranchIntoCurrent(
+	cwd: string,
+	baseBranch: string,
+	currentBranch: string,
+	signal?: AbortSignal,
+): Promise<{ success: boolean; output: string; conflictPaths: string[] }> {
+	const safeBranch = currentBranch.replace(/[^a-zA-Z0-9_-]/g, "-");
+	const worktreePath = `/tmp/vt-pi-merge-${safeBranch}-${Date.now()}`;
+
+	// Helper to clean up the worktree (best-effort).
+	const removeWorktree = async () => {
+		try {
+			await execAsync(`git worktree remove ${worktreePath} --force 2>/dev/null`, {
+				cwd,
+				timeout: 10_000,
+				signal,
+			});
+		} catch {
+			// Best-effort cleanup — ignore failures.
+		}
+	};
+
+	try {
+		// Step 1: Fetch the latest base branch from origin
+		await execAsync(`git fetch origin ${baseBranch} 2>&1`, {
+			cwd,
+			timeout: 30_000,
+			signal,
+		});
+
+		// Step 2: Create a worktree with the base branch checked out
+		await execAsync(`git worktree add ${worktreePath} origin/${baseBranch} 2>&1`, {
+			cwd,
+			timeout: 30_000,
+			signal,
+		});
+
+		// Step 3: Verify the worktree's HEAD matches what GitHub says
+		const expectedSha = await getBranchShaViaApi(cwd, baseBranch, signal);
+		if (expectedSha) {
+			const { stdout: actualSha } = await execAsync("git rev-parse HEAD", {
+				cwd: worktreePath,
+				timeout: 5_000,
+				signal,
+			});
+			if (actualSha.trim() !== expectedSha) {
+				// Force-update the local branch ref to match GitHub
+				await execAsync(
+					`git fetch origin ${baseBranch}:${baseBranch} --force 2>&1`,
+					{ cwd, timeout: 30_000, signal },
+				);
+				await removeWorktree();
+				await execAsync(
+					`git worktree add ${worktreePath} ${baseBranch} 2>&1`,
+					{ cwd, timeout: 30_000, signal },
+				);
+			}
+		}
+
+		// Step 4: Get the SHA to merge from (use the worktree's HEAD)
+		const { stdout: baseSha } = await execAsync("git rev-parse HEAD", {
+			cwd: worktreePath,
+			timeout: 5_000,
+			signal,
+		});
+		const sha = baseSha.trim();
+
+		// Step 5: Merge the base branch into the current PR branch
+		// `git merge` performs a merge (not a rebase), creating a merge commit
+		// on success. On conflicts it stops and lets the user resolve.
+		try {
+			const { stdout, stderr } = await execAsync(
+				`git merge ${sha} --no-edit 2>&1`,
+				{ cwd, timeout: 30_000, signal },
+			);
+			await removeWorktree();
+			return { success: true, output: stdout + stderr, conflictPaths: [] };
+		} catch (mergeErr: unknown) {
+			const output = extractErrorOutput(mergeErr);
+			const conflictPaths = extractConflictPaths(output);
+			await removeWorktree();
+			return { success: false, output, conflictPaths };
+		}
+	} catch (err: unknown) {
+		await removeWorktree();
+		return { success: false, output: extractErrorOutput(err), conflictPaths: [] };
+	}
+}
+
+/**
+ * Parse git merge output to extract paths of files with conflicts.
+ */
+export function extractConflictPaths(output: string): string[] {
+	const paths: string[] = [];
+	const regex = /CONFLICT\s+\([^)]+\):\s+Merge conflict in\s+(\S+)/g;
+	let match;
+	while ((match = regex.exec(output)) !== null) {
+		if (!paths.includes(match[1])) {
+			paths.push(match[1]);
+		}
+	}
+	return paths;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve) => {

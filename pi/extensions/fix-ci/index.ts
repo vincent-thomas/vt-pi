@@ -10,8 +10,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { currentBranch } from "../../lib/git-utils.ts";
 import {
-	runPreChecks,
 	gitPush,
 	getHeadSha,
 	hasUnpushedCommits,
@@ -21,6 +21,9 @@ import {
 	findGitPushInText,
 	findGitPushInScript,
 	extractScriptPaths,
+	getPrMergeableStatus,
+	getPrBaseBranch,
+	mergeBaseBranchIntoCurrent,
 	type CheckResult,
 	type FailureLog,
 } from "./logic.ts";
@@ -35,8 +38,7 @@ export default function (pi: ExtensionAPI) {
 		name: "push_and_check_ci",
 		label: "Push & Check CI",
 		description:
-			"Run local pre-push checks (static analysis), push the " +
-			"current branch to origin, then poll GitHub Actions checks until they " +
+			"Push the current branch to origin and poll GitHub Actions checks until they " +
 			"all finish. Returns the status of every check. For failures, includes " +
 			"the last 200 lines of log output. " +
 			"You MUST use this tool instead of running `git push` in bash. " +
@@ -46,7 +48,108 @@ export default function (pi: ExtensionAPI) {
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const cwd = ctx.cwd;
 
-			// 0. Check if there's something to push.
+			// ── 0. Check for PR merge conflicts ────────────────────────────
+			// If the PR has conflicts against its base branch, we try to merge
+			// the latest base branch into the PR branch before pushing.
+			const mergeableStatus = await getPrMergeableStatus(cwd, signal);
+
+			if (mergeableStatus === "CONFLICTING") {
+				onUpdate?.({
+					content: [
+						{
+							type: "text",
+							text: "PR has merge conflicts. Attempting to merge the latest base branch…",
+						},
+					],
+				});
+
+				const baseBranch = await getPrBaseBranch(cwd, signal);
+				const branchName = currentBranch(cwd);
+
+				if (!baseBranch || !branchName) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`Could not determine the PR's base branch or current branch. ` +
+									`Fix conflicts manually and try again.`,
+							},
+						],
+						details: {
+							mergeConflict: true,
+							error: "Unable to determine PR base branch or current branch",
+						},
+					};
+				}
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text: `Merging ${baseBranch} into ${branchName} via worktree…`,
+							},
+						],
+					},
+				);
+
+				const mergeResult = await mergeBaseBranchIntoCurrent(
+					cwd,
+					baseBranch,
+					branchName,
+					signal,
+				);
+
+				if (!mergeResult.success) {
+					const conflictList =
+						mergeResult.conflictPaths.length > 0
+							? mergeResult.conflictPaths.map((p) => `- \`${p}\``).join("\n")
+							: "Check the merge output below for conflicting files.";
+
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`## ⚠️ Merge Conflicts Detected\n\n` +
+									`The PR branch \`${branchName}\` has conflicts with the base branch ` +
+									`\`${baseBranch}\`. I attempted to merge the latest \`${baseBranch}\` into ` +
+									`\`${branchName}\` but there are unresolved conflicts.\n\n` +
+									`### Conflicting files:\n${conflictList}\n\n` +
+									`### Merge output:\n\`\`\`\n${mergeResult.output.trim()}\n\`\`\`\n\n` +
+									`### To resolve:\n` +
+									`1. Resolve the conflicts in the listed files\n` +
+									`2. \`git add\` the resolved files\n` +
+									`3. Commit the merge (the merge message is pre-filled)\n` +
+									`4. Run \`push_and_check_ci\` again`,
+							},
+						],
+						details: {
+							mergeConflict: true,
+							baseBranch,
+							currentBranch: branchName,
+							conflictPaths: mergeResult.conflictPaths,
+							mergeOutput: mergeResult.output,
+						},
+					};
+				}
+
+				onUpdate?.(
+					{
+						content: [
+							{
+								type: "text",
+								text:
+									`Successfully merged \`${baseBranch}\` into \`${branchName}\` ` +
+									`without conflicts. Proceeding with push…`,
+							},
+						],
+					},
+				);
+			}
+
+			// 1. Check if there's something to push.
 			const hasSomethingToPush = await hasUnpushedCommits(cwd, signal);
 
 			let pushedSha: string | undefined;
@@ -55,50 +158,7 @@ export default function (pi: ExtensionAPI) {
 				cycleCount++;
 				const cycle = cycleCount;
 
-				// 1. Pre-push checks (static analysis)
-				const completedSteps: string[] = [];
-				onUpdate?.({
-					content: [{ type: "text", text: "Running pre-push checks…" }],
-				});
-
-				const preCheck = await runPreChecks(cwd, signal, (step) => {
-					const icon = step.passed ? "✅" : "❌";
-					const time = step.elapsed ? ` (${step.elapsed}s)` : "";
-					completedSteps.push(`${icon} ${step.command}${time}`);
-					onUpdate?.({
-						content: [{ type: "text", text: completedSteps.join("\n") }],
-					});
-				});
-
-				if (!preCheck.passed) {
-					cycleCount--;
-					const failedStep = preCheck.steps.find((s) => !s.passed)!;
-					const passedSteps = preCheck.steps
-						.filter((s) => s.passed)
-						.map((s) => `✅ ${s.command}`)
-						.join("\n");
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									`Pre-push check failed. Fix the errors before pushing.\n\n` +
-									(passedSteps ? `${passedSteps}\n` : "") +
-									`❌ \`${failedStep.command}\`:\n\`\`\`\n${failedStep.output}\n\`\`\``,
-							},
-						],
-						details: { preCheckFailed: true, steps: preCheck.steps },
-					};
-				}
-
-				if (preCheck.steps.length > 0) {
-					completedSteps.push("Pushing to origin…");
-					onUpdate?.({
-						content: [{ type: "text", text: completedSteps.join("\n") }],
-					});
-				}
-
-				// 2. Push
+				// Push
 				onUpdate?.({
 					content: [{ type: "text", text: "Pushing to origin…" }],
 				});
