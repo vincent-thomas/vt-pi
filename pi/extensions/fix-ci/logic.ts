@@ -878,3 +878,152 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 		);
 	});
 }
+
+// ---------------------------------------------------------------------------
+// PR lifecycle helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a PR title from the current branch name.
+ * Strips the vt_ prefix, replaces separators with spaces, capitalizes first letter.
+ */
+export async function generatePrTitle(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	try {
+		const { stdout } = await execAsync(
+			"git rev-parse --abbrev-ref HEAD",
+			{ cwd, timeout: 5_000, signal },
+		);
+		let branch = stdout.trim();
+
+		// Remove vt_ prefix if present.
+		if (branch.startsWith("vt_")) {
+			branch = branch.slice(3);
+		}
+
+		// Replace separators (-, _, /, .) with spaces.
+		branch = branch.replace(/[-_\/.]/g, " ");
+
+		// Collapse multiple spaces.
+		branch = branch.replace(/\s+/g, " ");
+
+		// Capitalize first letter.
+		if (branch.length > 0) {
+			branch = branch[0].toUpperCase() + branch.slice(1);
+		}
+
+		return branch || "Changes from push_and_check_ci";
+	} catch {
+		return "Changes from push_and_check_ci";
+	}
+}
+
+/**
+ * Generate a PR body from commit messages since branch divergence.
+ * Returns a formatted markdown string with commit list and description.
+ */
+export async function generatePrBody(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	try {
+		// Determine the base branch (default to origin/main, fall back to HEAD~).
+		let base: string;
+		try {
+			const { stdout } = await execAsync(
+				"git rev-parse --abbrev-ref HEAD",
+				{ cwd, timeout: 5_000, signal },
+			);
+			const branch = stdout.trim();
+			// Try to find the fork point from the remote base branch.
+			const { stdout: mergeBase } = await execAsync(
+				"git merge-base HEAD origin/main 2>/dev/null || echo HEAD~1",
+				{ cwd, timeout: 10_000, signal },
+			);
+			base = mergeBase.trim();
+		} catch {
+			base = "HEAD~1";
+		}
+
+		const { stdout: log } = await execAsync(
+			`git log --oneline ${base}..HEAD`,
+			{ cwd, timeout: 10_000, signal },
+		);
+		const commits = log.trim().split("\n").filter(Boolean);
+
+		if (commits.length === 0) {
+			return "No commit messages available.";
+		}
+
+		let body = "## Changes\n\n";
+		for (const c of commits) {
+			// Strip the SHA prefix (e.g., "abc1234 Fix thing" → "Fix thing").
+			const msg = c.replace(/^[0-9a-f]{7,9}\s*/, "");
+			body += `- ${msg}\n`;
+		}
+		body += `\nAuto-generated from ${commits.length} commit(s) on this branch.`;
+		return body;
+	} catch {
+		return "Changes on this branch.";
+	}
+}
+
+/**
+ * Create a draft pull request for the current branch.
+ * Returns { success, url } or { success: false, error }.
+ */
+export async function createDraftPr(
+	cwd: string,
+	title: string,
+	body: string,
+	signal?: AbortSignal,
+): Promise<{ success: boolean; url: string | null; output: string }> {
+	try {
+		const { stdout, stderr } = await execAsync(
+			`gh pr create --draft --title '${title.replace(/'/g, "'\\''")}' --body '${body.replace(/'/g, "'\\''")}'`,
+			{ cwd, timeout: 30_000, signal },
+		);
+		return { success: true, url: stdout.trim() || null, output: stdout + stderr };
+	} catch (err: unknown) {
+		return { success: false, url: null, output: extractErrorOutput(err) };
+	}
+}
+
+/**
+ * Mark the current PR as ready for review (convert from draft).
+ * Returns true on success.
+ */
+export async function markPrReady(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	try {
+		await execAsync("gh pr ready", { cwd, timeout: 15_000, signal });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Add reviewers to the current PR.
+ * `reviewers` is a space-separated list of GitHub usernames.
+ */
+export async function addReviewers(
+	cwd: string,
+	reviewers: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	try {
+		await execAsync(`gh pr edit --add-reviewer "${reviewers}"`, {
+			cwd,
+			timeout: 15_000,
+			signal,
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}

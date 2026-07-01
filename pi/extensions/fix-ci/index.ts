@@ -28,11 +28,18 @@ import {
 	detectPrConflictsLocally,
 	needsPullBeforePush,
 	pullRemoteChanges,
+	detectPrNumber,
+	generatePrBody,
+	generatePrTitle,
+	createDraftPr,
+	markPrReady,
+	addReviewers,
 	type CheckResult,
 	type FailureLog,
 } from "./logic.ts";
 
 const MAX_CYCLES = 3;
+const REVIEWERS = "@vincent-thomas";
 
 export default function (pi: ExtensionAPI) {
 	let cycleCount = 0;
@@ -42,8 +49,10 @@ export default function (pi: ExtensionAPI) {
 		name: "push_and_check_ci",
 		label: "Push & Check CI",
 		description:
-			"Push the current branch to origin and poll GitHub Actions checks until they " +
-			"all finish. Returns the status of every check. For failures, includes " +
+			"Push the current branch to origin, create a draft PR if none exists, " +
+			"poll GitHub Actions checks until they all finish, and if all pass " +
+			"mark the PR as ready for review. " +
+			"Returns the status of every check. For failures, includes " +
 			"the last 200 lines of log output. " +
 			"You MUST use this tool instead of running `git push` in bash. " +
 			"After fixing failures (local or CI), call this tool again.",
@@ -308,6 +317,45 @@ export default function (pi: ExtensionAPI) {
 
 				// Pin all subsequent checks to the exact commit we just pushed.
 				pushedSha = (await getHeadSha(cwd, signal)) ?? undefined;
+
+				// ── Create draft PR if none exists ──────────────────────────
+				const existingPr = await detectPrNumber(cwd, signal);
+				if (!existingPr) {
+					onUpdate?.({
+						content: [{ type: "text", text: "Creating draft pull request…" }],
+					});
+
+					// Generate PR body from commit messages.
+					const prBody = await generatePrBody(cwd, signal);
+
+					// Use provided title or auto-generate from the branch name.
+					const prTitle = await generatePrTitle(cwd, signal);
+
+					const prResult = await createDraftPr(cwd, prTitle, prBody, signal);
+
+					if (!prResult.success) {
+						return {
+							content: [
+								{
+									type: "text",
+									text:
+										`Draft PR creation failed. The push succeeded but the PR ` +
+										`could not be created.\n\n\`\`\`\n${prResult.output}\n\`\`\``,
+								},
+							],
+							details: { prCreationFailed: true, output: prResult.output },
+						};
+					}
+
+					const prUrl = prResult.url ? prResult.url : "(see gh output)";
+					onUpdate?.({
+						content: [{ type: "text", text: `Draft PR created: ${prUrl}` }],
+					});
+				} else {
+					onUpdate?.({
+						content: [{ type: "text", text: `PR #${existingPr} already exists — skipping creation.` }],
+					});
+				}
 			} else {
 				onUpdate?.({
 					content: [
@@ -391,14 +439,40 @@ export default function (pi: ExtensionAPI) {
 			// ✅ All passed
 			if (failures.length === 0) {
 				cycleCount = 0;
+
+				const successLines = [
+					`All ${pollResult.checks.length} checks passed for ${pollResult.mode}. ✅`,
+					"",
+					formatChecks(pollResult.checks),
+				];
+
+				// ── Mark PR ready and add reviewers ────────────────────────
+				const prNum = await detectPrNumber(cwd, signal);
+				if (prNum) {
+					onUpdate?.({ content: [{ type: "text", text: `CI passed for PR #${prNum}. Marking ready for review…` }] });
+
+					const ready = await markPrReady(cwd, signal);
+					if (ready) {
+						successLines.push("", `✅ PR #${prNum} marked as ready for review.`);
+					} else {
+						successLines.push("", `⚠️ Could not mark PR #${prNum} as ready (may already be ready).`);
+					}
+
+					const reviewers = await addReviewers(cwd, REVIEWERS, signal);
+					if (reviewers) {
+						successLines.push(`👀 Requested review from ${REVIEWERS}.`);
+					} else {
+						successLines.push(`⚠️ Could not request review from ${REVIEWERS}.`);
+					}
+				} else {
+					successLines.push("", "⚠️ No PR detected — push was not preceded by PR creation.");
+				}
+
 				return {
 					content: [
 						{
 							type: "text",
-							text:
-								`All ${pollResult.checks.length} checks passed for ${pollResult.mode}. ✅\n\n` +
-								formatChecks(pollResult.checks) +
-								`\n\nCI is green — you're done.`,
+							text: successLines.join("\n"),
 						},
 					],
 					details: {
