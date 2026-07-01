@@ -10,6 +10,8 @@
  */
 export const BANNED_FOLDERS: string[] = [
 	".git",
+	"node_modules",
+	"target",
 ];
 
 /** Normalize path separators and remove trailing slash. */
