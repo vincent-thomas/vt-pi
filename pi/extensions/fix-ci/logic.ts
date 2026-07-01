@@ -981,8 +981,27 @@ export async function createDraftPr(
 	signal?: AbortSignal,
 ): Promise<{ success: boolean; url: string | null; output: string }> {
 	try {
+		// Get the current branch name to pass explicitly via --head.
+		const { stdout: branch } = await execAsync(
+			"git rev-parse --abbrev-ref HEAD",
+			{ cwd, timeout: 5_000, signal },
+		);
+		const head = branch.trim();
+
+		// Detect the default base branch via gh.
+		let base = "main";
+		try {
+			const { stdout: defaultBranch } = await execAsync(
+				"gh repo view --json defaultBranch --jq .defaultBranch 2>/dev/null",
+				{ cwd, timeout: 10_000, signal },
+			);
+			if (defaultBranch.trim()) base = defaultBranch.trim();
+		} catch {
+			// fallback to main
+		}
+
 		const { stdout, stderr } = await execAsync(
-			`gh pr create --draft --title '${title.replace(/'/g, "'\\''")}' --body '${body.replace(/'/g, "'\\''")}'`,
+			`gh pr create --draft --title '${title.replace(/'/g, "'\\''")}' --body '${body.replace(/'/g, "'\\''")}' --head '${head}' --base '${base}'`,
 			{ cwd, timeout: 30_000, signal },
 		);
 		return { success: true, url: stdout.trim() || null, output: stdout + stderr };
