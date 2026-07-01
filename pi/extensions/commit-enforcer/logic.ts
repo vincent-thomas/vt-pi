@@ -72,16 +72,12 @@ export async function checkGitState(
 	return { dirty, unpushed };
 }
 
-export const MAX_ENFORCEMENTS = 3;
-
 /**
  * Build the nag message the agent sees when enforcement triggers.
  */
 export function buildNagMessage(
 	dirty: boolean,
 	unpushed: boolean,
-	count: number,
-	max: number,
 ): string {
 	const issues: string[] = [];
 	if (dirty) issues.push("uncommitted changes in the working tree");
@@ -93,10 +89,5 @@ export function buildNagMessage(
 		"2. ✅ Push committed changes using `push_and_check_ci`\n" +
 		"3. 🏳️ Yield back anyway by calling `yield_with_uncommitted_changes` with a reason\n\n";
 
-	const escalation =
-		count >= max
-			? ""
-			: `*(Reminder ${count}/${max} — ${max - count} more before I stop asking)*`;
-
-	return preamble + options + escalation;
+	return preamble + options;
 }

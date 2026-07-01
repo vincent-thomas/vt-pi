@@ -6,16 +6,14 @@
  * follow-up message demanding the agent commit/push or use the escape
  * hatch `yield_with_uncommitted_changes(reason)`.
  *
- * After MAX_ENFORCEMENTS (3) reminders without resolution, it gives up
- * and notifies the user directly.
+ * It keeps reminding the agent every turn until the state is resolved.
  */
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { checkGitState, buildNagMessage, MAX_ENFORCEMENTS } from "./logic.ts";
+import { checkGitState, buildNagMessage } from "./logic.ts";
 
 // ── In-memory state (per-session) ───────────────────────────────────────────
 let yieldedWithReason: string | null = null;
-let enforcementCount = 0;
 
 const ENFORCER_SYSTEM_PROMPT = `
 
@@ -34,7 +32,6 @@ This is your last resort — always prefer committing and pushing.
 
 function resetState() {
   yieldedWithReason = null;
-  enforcementCount = 0;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -102,47 +99,10 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    // ── Max reminders reached — give up ──────────────────────────────
-    if (enforcementCount >= MAX_ENFORCEMENTS) {
-      const issues: string[] = [];
-      if (state.dirty) issues.push("uncommitted changes");
-      if (state.unpushed) issues.push("unpushed commits");
-
-      pi.sendMessage({
-        customType: "commit-enforcer",
-        content: [
-          {
-            type: "text" as const,
-            text:
-              `⚠️ Gave up enforcing after ${MAX_ENFORCEMENTS} reminders ` +
-              `— ${issues.join(" and ")} still pending. Notifying user directly.`,
-          },
-        ],
-        display: true,
-        details: { ...state, exhausted: true },
-      });
-
-      if (ctx.hasUI) {
-        const items: string[] = [];
-        if (state.dirty) items.push("uncommitted changes");
-        if (state.unpushed) items.push("unpushed commits");
-        ctx.ui.notify(
-          `⚠️ Commit enforcer: ${items.join(" and ")} still pending after ${MAX_ENFORCEMENTS} reminders.`,
-          "warning",
-        );
-      }
-
-      resetState();
-      return;
-    }
-
     // ── Remind the agent ────────────────────────────────────────────
-    enforcementCount++;
     const message = buildNagMessage(
       state.dirty,
       state.unpushed,
-      enforcementCount,
-      MAX_ENFORCEMENTS,
     );
 
     pi.sendUserMessage(message, { deliverAs: "followUp" });
