@@ -68,6 +68,7 @@ When a tool call fails, treat the error as debugging input:
   - `git_commit { message: "...", add_all: true }` — stages everything and commits in one step. Use this for quick checkpoints where all changes belong together.
   - `git_commit { message: "...", add_all: false }` — commits only pre-staged changes (for selective commits).
 - **Branch hygiene:** short-lived, focused branches. Never commit on `main`/`master`.
+- **You MUST resolve git state before yielding back.** The commit enforcer will block you from ending your response while the working tree is dirty or there are unpushed commits. If you cannot commit or push, you must call `yield_with_uncommitted_changes(reason: "...")` to explicitly yield back with a justification. This is tracked and visible to the user.
 
 ---
 
