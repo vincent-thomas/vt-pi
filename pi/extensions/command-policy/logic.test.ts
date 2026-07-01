@@ -367,6 +367,7 @@ test("allows git on a subcommand basis", () => {
 test("can explicitly ban entries with model guidance", () => {
 	assert.equal(findEntry("git config")?.status, CommandPolicyStatus.Banned);
 	assert.match(findEntry("git config")?.description ?? "", /Do not inspect or modify Git configuration/);
+	assert.equal(findEntry("git branch")?.status, CommandPolicyStatus.Banned);
 	assert.equal(findEntry("grep")?.status, CommandPolicyStatus.Banned);
 	assert.match(findEntry("grep")?.description ?? "", /Use rg/);
 });
@@ -374,8 +375,6 @@ test("can explicitly ban entries with model guidance", () => {
 test("supports banned flags per entry", () => {
 	assert.ok(findEntry("rm")?.bannedFlags?.includes("-rf"));
 	assert.ok(findEntry("git checkout")?.bannedFlags?.includes("-b"));
-	assert.ok(findEntry("git branch")?.bannedFlags?.includes("--unset-upstream"));
-	assert.ok(findEntry("git branch")?.bannedFlags?.includes("--set-upstream-to"));
 });
 
 test("supports allowed flags per allowed entry", () => {

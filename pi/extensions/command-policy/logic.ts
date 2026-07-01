@@ -81,11 +81,10 @@ export const COMMAND_POLICY_ENTRIES: CommandPolicyEntry[] = [
 	},
 	{
 		name: "git branch",
-		status: CommandPolicyStatus.Allowed,
+		status: CommandPolicyStatus.Banned,
 		command: "git",
 		subcommand: [["branch"]],
-		bannedFlags: ["--unset-upstream", "--set-upstream-to"],
-		description: "Use the git_commit or push_and_check_ci tools for upstream management.",
+		description: "Use the git_commit or push_and_check_ci tools for branch management.",
 	},
 	{ name: "git", status: CommandPolicyStatus.Allowed, command: "git", subcommand: [
     ["diff"],
