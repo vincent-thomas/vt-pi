@@ -858,6 +858,44 @@ export async function pullRemoteChanges(
 }
 
 // ---------------------------------------------------------------------------
+// Base branch ahead detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if the PR's base branch has commits ahead of the current branch.
+ * Fetches the latest base branch ref from origin, then counts commits on
+ * the base branch that aren't reachable from HEAD.
+ *
+ * Returns true if the base branch has newer commits that should be merged
+ * into the current branch before pushing.
+ */
+export async function isBaseBranchAhead(
+	cwd: string,
+	baseBranch: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	try {
+		// Fetch the latest base branch ref from origin
+		await execAsync(`git fetch origin ${baseBranch} 2>&1`, {
+			cwd,
+			timeout: 30_000,
+			signal,
+		});
+
+		// Count commits on origin/<base> that aren't reachable from HEAD.
+		// If > 0, the base branch has commits ahead of the current branch.
+		const { stdout } = await execAsync(
+			`git rev-list --count HEAD..origin/${baseBranch} 2>/dev/null`,
+			{ cwd, timeout: 10_000, signal },
+		);
+		const count = parseInt(stdout.trim(), 10);
+		return !isNaN(count) && count > 0;
+	} catch {
+		return false;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

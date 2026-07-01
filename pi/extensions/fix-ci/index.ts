@@ -22,12 +22,11 @@ import {
   findGitPushInText,
   findGitPushInScript,
   extractScriptPaths,
-  getPrMergeableStatus,
   getPrBaseBranch,
   mergeBaseBranchIntoCurrent,
-  detectPrConflictsLocally,
   needsPullBeforePush,
   pullRemoteChanges,
+  isBaseBranchAhead,
   detectPrNumber,
   generatePrBody,
   generatePrTitle,
@@ -82,136 +81,96 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // ── 1. Check for PR merge conflicts ────────────────────────────
-      // If the PR has conflicts against its base branch, we try to merge
-      // the latest base branch into the PR branch before pushing.
-      const mergeableStatus = await getPrMergeableStatus(cwd, signal);
-
-      let baseBranch: string | null = null;
+      // ── 1. Check if base branch is ahead — merge if so ─────────────
+      // Keep the PR branch up to date with the base branch before pushing
+      // and running CI. This prevents CI from testing a stale branch.
       let branchName = currentBranch(cwd);
-      let hasConflicts = mergeableStatus === "CONFLICTING";
+      let prBase = await getPrBaseBranch(cwd, signal);
 
-      if (mergeableStatus === "CONFLICTING") {
-        baseBranch = await getPrBaseBranch(cwd, signal);
-      } else if (mergeableStatus !== "MERGEABLE") {
-        // GitHub returned null (no PR, still computing, or unavailable).
-        // Try local git-based conflict detection as a fallback.
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: "GitHub merge status unknown — checking locally…",
-            },
-          ],
-        });
+      if (prBase) {
+        const baseAhead = await isBaseBranchAhead(cwd, prBase, signal);
+        if (baseAhead) {
+          if (!branchName) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Could not determine the current branch name. ` +
+                    `Fix manually and try again.`,
+                },
+              ],
+              details: {
+                mergeConflict: true,
+                error: "Unable to determine current branch",
+              },
+            };
+          }
 
-        const localCheck = await detectPrConflictsLocally(cwd, signal);
-        if (localCheck.hasConflicts) {
-          hasConflicts = true;
-          baseBranch = localCheck.baseBranch;
           onUpdate?.({
             content: [
               {
                 type: "text",
-                text: `Local git check found conflicts with \`${baseBranch}\`.`,
+                text: `Merging ${prBase} into ${branchName} via worktree…`,
+              },
+            ],
+          });
+
+          const mergeResult = await mergeBaseBranchIntoCurrent(
+            cwd,
+            prBase,
+            branchName,
+            signal,
+          );
+
+          if (!mergeResult.success) {
+            const conflictList =
+              mergeResult.conflictPaths.length > 0
+                ? mergeResult.conflictPaths.map((p) => `- \`${p}\``).join("\n")
+                : "Check the merge output below for conflicting files.";
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `## ⚠️ Merge Conflicts Detected\n\n` +
+                    `The PR branch \`${branchName}\` has conflicts with the base branch ` +
+                    `\`${prBase}\`. I attempted to merge the latest \`${prBase}\` into ` +
+                    `\`${branchName}\` but there are unresolved conflicts.\n\n` +
+                    `### Conflicting files:\n${conflictList}\n\n` +
+                    `### Merge output:\n\`\`\`\n${mergeResult.output.trim()}\n\`\`\`\n\n` +
+                    `### To resolve:\n` +
+                    `1. Resolve the conflicts in the listed files\n` +
+                    `2. \`git add\` the resolved files\n` +
+                    `3. Commit the merge (the merge message is pre-filled)\n` +
+                    `4. Run \`push_and_check_ci\` again`,
+                },
+              ],
+              details: {
+                mergeConflict: true,
+                baseBranch: prBase,
+                currentBranch: branchName,
+                conflictPaths: mergeResult.conflictPaths,
+                mergeOutput: mergeResult.output,
+              },
+            };
+          }
+
+          onUpdate?.({
+            content: [
+              {
+                type: "text",
+                text:
+                  `Successfully merged \`${prBase}\` into \`${branchName}\` ` +
+                  `without conflicts. Proceeding with push…`,
               },
             ],
           });
         }
       }
 
-      if (hasConflicts) {
-        baseBranch = baseBranch ?? (await getPrBaseBranch(cwd, signal));
-
-        if (!baseBranch || !branchName) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `Could not determine the PR's base branch or current branch. ` +
-                  `Fix conflicts manually and try again.`,
-              },
-            ],
-            details: {
-              mergeConflict: true,
-              error: "Unable to determine PR base branch or current branch",
-            },
-          };
-        }
-
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: "PR has merge conflicts. Attempting to merge the latest base branch…",
-            },
-          ],
-        });
-
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: `Merging ${baseBranch} into ${branchName} via worktree…`,
-            },
-          ],
-        });
-
-        const mergeResult = await mergeBaseBranchIntoCurrent(
-          cwd,
-          baseBranch,
-          branchName,
-          signal,
-        );
-
-        if (!mergeResult.success) {
-          const conflictList =
-            mergeResult.conflictPaths.length > 0
-              ? mergeResult.conflictPaths.map((p) => `- \`${p}\``).join("\n")
-              : "Check the merge output below for conflicting files.";
-
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `## ⚠️ Merge Conflicts Detected\n\n` +
-                  `The PR branch \`${branchName}\` has conflicts with the base branch ` +
-                  `\`${baseBranch}\`. I attempted to merge the latest \`${baseBranch}\` into ` +
-                  `\`${branchName}\` but there are unresolved conflicts.\n\n` +
-                  `### Conflicting files:\n${conflictList}\n\n` +
-                  `### Merge output:\n\`\`\`\n${mergeResult.output.trim()}\n\`\`\`\n\n` +
-                  `### To resolve:\n` +
-                  `1. Resolve the conflicts in the listed files\n` +
-                  `2. \`git add\` the resolved files\n` +
-                  `3. Commit the merge (the merge message is pre-filled)\n` +
-                  `4. Run \`push_and_check_ci\` again`,
-              },
-            ],
-            details: {
-              mergeConflict: true,
-              baseBranch,
-              currentBranch: branchName,
-              conflictPaths: mergeResult.conflictPaths,
-              mergeOutput: mergeResult.output,
-            },
-          };
-        }
-
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text:
-                `Successfully merged \`${baseBranch}\` into \`${branchName}\` ` +
-                `without conflicts. Proceeding with push…`,
-            },
-          ],
-        });
-      }
-
-      // 1. Check if there's something to push.
+      // 2. Check if there's something to push.
       const hasSomethingToPush = await hasUnpushedCommits(cwd, signal);
 
       let pushedSha: string | undefined;
