@@ -99,7 +99,7 @@ export async function hasDirtyWorkingTree(
 
 export async function detectPrNumber(cwd: string, signal?: AbortSignal): Promise<number | null> {
 	try {
-		const { stdout } = await execAsync("gh pr view --json number --jq '.number' 2>/dev/null", {
+		const { stdout } = await execAsync("gh pr view --json number,state --jq 'select(.state != \"CLOSED\") | .number' 2>/dev/null", {
 			cwd,
 			timeout: 15_000,
 			signal,
